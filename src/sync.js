@@ -90,4 +90,33 @@ function sync(projectName, opts = {}) {
   }
 }
 
-module.exports = { sync };
+// Read-only divergence check: fetches remote then counts ahead/behind commits.
+// Does NOT touch the working tree or current branch.
+function getSyncState(projectName, opts = {}) {
+  const { remote = 'peer' } = opts;
+
+  const reg = loadRegistry();
+  const proj = reg.find(p => p.name === projectName);
+  if (!proj) throw new Error(`Project not found in registry: ${projectName}`);
+
+  const repoPath = proj.path;
+
+  const fetchResult = run(`git fetch "${remote}"`, repoPath);
+  if (fetchResult.code !== 0) {
+    throw new Error(`git fetch failed: ${fetchResult.stderr.trim()}`);
+  }
+
+  const behindResult = run('git rev-list --count HEAD..FETCH_HEAD', repoPath);
+  const aheadResult  = run('git rev-list --count FETCH_HEAD..HEAD', repoPath);
+  const behind = parseInt(behindResult.stdout.trim(), 10) || 0;
+  const ahead  = parseInt(aheadResult.stdout.trim(), 10)  || 0;
+
+  let state = 'in-sync';
+  if (ahead > 0 && behind > 0) state = 'diverged';
+  else if (ahead > 0) state = 'local-ahead';
+  else if (behind > 0) state = 'remote-ahead';
+
+  return { project: projectName, remote, ahead, behind, state };
+}
+
+module.exports = { sync, getSyncState };

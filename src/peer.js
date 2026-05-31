@@ -63,13 +63,20 @@ function postJSON(url, body, token) {
 }
 
 async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
-  const { name = 'peer', role = null } = opts;
+  const { name = 'peer' } = opts;
   const cfg = loadConfig();
   const selfToken = cfg.token;
   const selfUrl = cfg.selfUrl || cfg.tunnelUrl;
 
   if (!selfUrl) {
     throw new Error('No selfUrl set — run `serve` first so your URL is known before connecting');
+  }
+
+  // Build per-project roles map from our current registry
+  const reg = loadRegistry();
+  const projectRoles = {};
+  for (const proj of reg) {
+    projectRoles[proj.name] = proj.role;
   }
 
   // POST our info to peer's control endpoint
@@ -80,34 +87,31 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
       url: selfUrl,
       token: selfToken,
       name,
-      role
+      projectRoles
     }, peerToken);
   } catch (e) {
     throw new Error(`Failed to reach peer at ${registerUrl}: ${e.message}`);
   }
 
-  // Save peer in our instance config
+  // Save peer in our instance config (role removed — now per-project in registry)
   const peers = cfg.peers || [];
   const existingIdx = peers.findIndex(p => p.name === name);
-  const peerEntry = { name, url: peerBaseUrl, token: peerToken, role };
+  const peerEntry = { name, url: peerBaseUrl, token: peerToken };
   if (existingIdx >= 0) peers[existingIdx] = peerEntry;
   else peers.push(peerEntry);
   cfg.peers = peers;
   saveConfig(cfg);
 
   // Add peer to all shared projects in registry
-  const reg = loadRegistry();
   for (const proj of reg) {
     const authedPeerUrl = authedUrl(peerBaseUrl + '/' + proj.name + '.git', peerToken);
     addRemote(proj.path, name, authedPeerUrl);
 
-    const pe = { name, url: peerBaseUrl, token: peerToken, role };
+    const pe = { name, url: peerBaseUrl, token: peerToken, role: null };
     const existingPeer = proj.peers.findIndex(p => p.name === name);
     if (existingPeer >= 0) proj.peers[existingPeer] = pe;
     else proj.peers.push(pe);
-
-    // Set our role if specified
-    if (role) proj.role = role;
+    // Per-project role (proj.role) is managed separately via /api/project-role
   }
   saveRegistry(reg);
 
