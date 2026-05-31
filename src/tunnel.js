@@ -63,7 +63,7 @@ async function startCloudflared(port) {
     });
 
     let resolved = false;
-    const urlRegex = /https:\/\/[\w-]+\.trycloudflare\.com/;
+    const urlRegex = /https:\/\/(?!api\.)[\w-]+\.trycloudflare\.com/;
 
     const onData = (data) => {
       const text = data.toString();
