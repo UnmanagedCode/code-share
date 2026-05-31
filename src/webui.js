@@ -1,12 +1,42 @@
 'use strict';
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { loadConfig, saveConfig, loadRegistry, PROJECTS_ROOT } = require('./config');
 const registry = require('./registry');
 const peer = require('./peer');
+const { getSyncState } = require('./sync');
 
 const UI_HTML = path.join(__dirname, '../static/ui.html');
+
+// Authenticated GET to a peer's control endpoint
+function fetchJSON(url, token) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const opts = {
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname + (u.search || ''),
+      method: 'GET',
+      headers: {
+        'Authorization': `Basic ${Buffer.from(`x:${token}`).toString('base64')}`
+      }
+    };
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.request(opts, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (res.statusCode >= 400) { reject(new Error(`HTTP ${res.statusCode}: ${text.trim()}`)); return; }
+        try { resolve(JSON.parse(text)); } catch { resolve(text); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -89,10 +119,59 @@ async function handleAPI(req, res) {
     }
     try {
       const result = await peer.connectPeer(body.url, body.token, {
-        name: body.name || 'peer',
-        role: body.role || null
+        name: body.name || 'peer'
       });
       sendJSON(res, 200, { ok: true, result });
+    } catch (e) {
+      sendJSON(res, 500, { error: e.message });
+    }
+    return true;
+  }
+
+  // Set per-project role
+  if (req.method === 'POST' && pathname === '/api/project-role') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch {
+      sendJSON(res, 400, { error: 'Invalid JSON' });
+      return true;
+    }
+    const { name, role } = body;
+    if (!name) { sendJSON(res, 400, { error: 'name is required' }); return true; }
+    const validRoles = ['leader', 'follower', null, ''];
+    if (!validRoles.includes(role)) { sendJSON(res, 400, { error: 'role must be leader, follower, or null' }); return true; }
+    try {
+      registry.updateProject(name, { role: role || null });
+      sendJSON(res, 200, { ok: true });
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return true;
+  }
+
+  // Fetch a connected peer's /control/status (shows their shared projects)
+  if (req.method === 'GET' && pathname === '/api/peer-status') {
+    const peerName = url.searchParams.get('peer');
+    const cfg = loadConfig();
+    const peerInfo = (cfg.peers || []).find(p => p.name === peerName);
+    if (!peerInfo) { sendJSON(res, 404, { error: `Peer not found: ${peerName}` }); return true; }
+    try {
+      const statusUrl = peerInfo.url.replace(/\/?$/, '') + '/control/status';
+      const peerStatus = await fetchJSON(statusUrl, peerInfo.token);
+      sendJSON(res, 200, peerStatus);
+    } catch (e) {
+      sendJSON(res, 502, { error: `Could not reach peer: ${e.message}` });
+    }
+    return true;
+  }
+
+  // Compute sync state (ahead/behind) for a shared project vs a remote
+  if (req.method === 'GET' && pathname === '/api/sync-status') {
+    const projectName = url.searchParams.get('project');
+    const remoteName  = url.searchParams.get('remote') || 'peer';
+    if (!projectName) { sendJSON(res, 400, { error: 'project query param is required' }); return true; }
+    try {
+      const state = getSyncState(projectName, { remote: remoteName });
+      sendJSON(res, 200, state);
     } catch (e) {
       sendJSON(res, 500, { error: e.message });
     }

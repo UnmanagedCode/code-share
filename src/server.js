@@ -38,17 +38,22 @@ async function handleRegister(req, res) {
     return;
   }
 
-  const { url: peerUrl, token: peerToken, name: peerName, role: peerRole } = body;
+  const { url: peerUrl, token: peerToken, name: peerName, role: legacyRole, projectRoles } = body;
   if (!peerUrl || !peerToken || !peerName) {
     sendJSON(res, 400, { error: 'Missing required fields: url, token, name' });
     return;
   }
 
-  // Check for leader conflict across all projects
-  if (peerRole === 'leader') {
-    const reg = loadRegistry();
-    for (const proj of reg) {
-      const existingLeader = proj.peers.find(p => p.role === 'leader');
+  // projectRoles: { [projName]: 'leader'|'follower'|null }
+  // Fall back to legacy global role for backward compat with old clients.
+  const roles = projectRoles || {};
+
+  // Check for leader conflict per-project
+  const reg = loadRegistry();
+  for (const proj of reg) {
+    const effectiveRole = roles[proj.name] !== undefined ? roles[proj.name] : legacyRole;
+    if (effectiveRole === 'leader') {
+      const existingLeader = proj.peers.find(p => p.role === 'leader' && p.name !== peerName);
       if (existingLeader) {
         sendJSON(res, 409, { error: `Project "${proj.name}" already has a leader: ${existingLeader.name}` });
         return;
@@ -56,10 +61,10 @@ async function handleRegister(req, res) {
     }
   }
 
-  // Add peer to all shared projects
-  const reg = loadRegistry();
+  // Add peer to all shared projects with per-project role
   for (const proj of reg) {
-    const peerEntry = { name: peerName, url: peerUrl, token: peerToken, role: peerRole || null };
+    const effectiveRole = roles[proj.name] !== undefined ? roles[proj.name] : (legacyRole || null);
+    const peerEntry = { name: peerName, url: peerUrl, token: peerToken, role: effectiveRole };
     const existing = proj.peers.findIndex(p => p.name === peerName);
     if (existing >= 0) proj.peers[existing] = peerEntry;
     else proj.peers.push(peerEntry);
@@ -70,7 +75,7 @@ async function handleRegister(req, res) {
   const cfg = loadConfig();
   cfg.peers = cfg.peers || [];
   const existingCfg = cfg.peers.findIndex(p => p.name === peerName);
-  const peerEntry = { name: peerName, url: peerUrl, token: peerToken, role: peerRole || null };
+  const peerEntry = { name: peerName, url: peerUrl, token: peerToken };
   if (existingCfg >= 0) cfg.peers[existingCfg] = peerEntry;
   else cfg.peers.push(peerEntry);
   saveConfig(cfg);

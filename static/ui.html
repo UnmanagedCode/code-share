@@ -12,12 +12,15 @@
   .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
   .row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
   .label { color: #8b949e; min-width: 100px; flex-shrink: 0; }
-  .val { color: #e6edf3; word-break: break-all; flex: 1; }
+  .val { color: #e6edf3; word-break: break-all; flex: 1; min-width: 0; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; }
-  .badge-green { background: #1a4731; color: #3fb950; }
-  .badge-gray { background: #21262d; color: #8b949e; }
-  .badge-blue { background: #1c3452; color: #58a6ff; }
-  button { background: #238636; color: #fff; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 0.85rem; }
+  .badge-green  { background: #1a4731; color: #3fb950; }
+  .badge-gray   { background: #21262d; color: #8b949e; }
+  .badge-blue   { background: #1c3452; color: #58a6ff; }
+  .badge-yellow { background: #3d2e00; color: #d29922; }
+  .badge-orange { background: #3d1f00; color: #f0883e; }
+  /* Req 1 fix: prevent buttons from being pushed outside flex containers */
+  button { background: #238636; color: #fff; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 0.85rem; flex-shrink: 0; }
   button:hover { background: #2ea043; }
   button.danger { background: #b62324; }
   button.danger:hover { background: #da3633; }
@@ -26,16 +29,26 @@
   input, select { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 6px 10px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; width: 100%; }
   .copy-btn { min-width: 60px; background: #1c3452; color: #58a6ff; border: 1px solid #1c3452; }
   .copy-btn:hover { background: #264a70; }
+  /* Req 1 fix: text wrapper fills available space and allows shrinking */
   .project-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid #21262d; }
   .project-row:last-child { border-bottom: none; }
-  .project-name { font-weight: bold; flex: 1; }
-  .project-path { color: #8b949e; font-size: 0.8rem; }
+  .project-row > .project-info { flex: 1; min-width: 0; overflow: hidden; }
+  .project-name { font-weight: bold; }
+  /* Req 1 fix: truncate long paths instead of overflowing */
+  .project-path { color: #8b949e; font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .project-controls { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
   .error { color: #f85149; font-size: 0.85rem; margin-top: 0.5rem; }
   .success { color: #3fb950; font-size: 0.85rem; margin-top: 0.5rem; }
   .section-row { display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 0.75rem; }
-  .section-row > div { flex: 1; }
+  .section-row > div { flex: 1; min-width: 0; }
   .section-row label { color: #8b949e; font-size: 0.8rem; display: block; margin-bottom: 4px; }
   #connect-msg { margin-top: 0.5rem; font-size: 0.85rem; }
+  .peer-card { margin-bottom: 0.75rem; padding-bottom: 0.75rem; border-bottom: 1px solid #21262d; }
+  .peer-card:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .peer-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; }
+  .peer-projects { padding-left: 1rem; margin-top: 0.35rem; }
+  .peer-project-item { font-size: 0.8rem; color: #8b949e; padding: 2px 0; }
+  .sync-indicator { font-size: 0.75rem; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -46,7 +59,7 @@
   <div class="row"><span class="label">Status</span><span class="val" id="s-status">Loading…</span></div>
   <div class="row"><span class="label">LAN URL</span><span class="val" id="s-lan">—</span><button class="copy-btn" onclick="copy('s-lan')">Copy</button></div>
   <div class="row"><span class="label">Tunnel URL</span><span class="val" id="s-tunnel">—</span><button class="copy-btn" onclick="copy('s-tunnel')">Copy</button></div>
-  <div class="row"><span class="label">Token</span><span class="val" id="s-token">—</span><button class="copy-btn" onclick="copy('s-token')">Copy</button></div>
+  <div class="row"><span class="label">Connection</span><span class="val" id="s-cs">—</span><button class="copy-btn" onclick="copy('s-cs')">Copy</button></div>
 </div>
 
 <h2>Projects under PROJECTS_ROOT</h2>
@@ -55,18 +68,13 @@
 <h2>Connect a Peer</h2>
 <div class="card">
   <div class="section-row">
-    <div><label>Peer URL (their serve URL)</label><input id="c-url" placeholder="http://x:token@host:9419"></div>
-    <div style="max-width:120px"><label>Peer Token</label><input id="c-token" placeholder="token"></div>
+    <div>
+      <label>Connection string (paste peer's cs1:… string)</label>
+      <input id="c-cs" placeholder="cs1:…">
+    </div>
   </div>
   <div class="section-row">
-    <div><label>Local name for peer</label><input id="c-name" value="peer"></div>
-    <div><label>Role</label>
-      <select id="c-role">
-        <option value="">Symmetric (no leader)</option>
-        <option value="leader">Leader</option>
-        <option value="follower">Follower</option>
-      </select>
-    </div>
+    <div><label>Peer name (local label)</label><input id="c-name" value="peer"></div>
   </div>
   <button onclick="doConnect()">Connect</button>
   <div id="connect-msg"></div>
@@ -77,6 +85,32 @@
 
 <script>
 let status = null;
+let sharedRegistry = [];
+
+// ── Connection string helpers (Req 5 + 6) ───────────────────────────────────
+
+function makeConnectionString(rawUrl, token) {
+  if (!rawUrl || rawUrl === '—') return null;
+  try {
+    const u = new URL(rawUrl);
+    u.username = '';
+    u.password = '';
+    const bare = u.toString().replace(/\/$/, '');
+    const json = JSON.stringify({ url: bare, token });
+    return 'cs1:' + btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  } catch { return null; }
+}
+
+function parseConnectionString(s) {
+  if (!s || !s.startsWith('cs1:')) return null;
+  try {
+    const b64 = s.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b64 + '=='.slice(0, (4 - b64.length % 4) % 4);
+    return JSON.parse(atob(pad));
+  } catch { return null; }
+}
+
+// ── Main load ────────────────────────────────────────────────────────────────
 
 async function load() {
   try {
@@ -85,21 +119,35 @@ async function load() {
       fetch('/api/projects').then(r => r.json())
     ]);
     status = s;
+    sharedRegistry = s.shared || [];
     renderStatus(s);
-    renderProjects(p, s.shared || []);
+    renderProjects(p, sharedRegistry);
     renderPeers(s.peers || []);
   } catch(e) {
     document.getElementById('s-status').textContent = 'Error: ' + e.message;
   }
 }
 
+// ── Render helpers ───────────────────────────────────────────────────────────
+
 function renderStatus(s) {
   document.getElementById('s-status').innerHTML = '<span class="badge badge-green">serving</span>';
-  const lanUrl = s.selfUrl || '—';
-  const tunnelUrl = s.tunnelUrl || '—';
-  document.getElementById('s-lan').textContent = lanUrl;
-  document.getElementById('s-tunnel').textContent = tunnelUrl;
-  document.getElementById('s-token').textContent = s.token || '—';
+
+  const lanRaw    = s.selfUrl   || null;
+  const tunnelRaw = s.tunnelUrl || null;
+  document.getElementById('s-lan').textContent    = lanRaw    || '—';
+  document.getElementById('s-tunnel').textContent = tunnelRaw || '—';
+
+  // Generate connection string from tunnel URL (preferred) or LAN URL
+  const sourceUrl = tunnelRaw || lanRaw;
+  const cs = makeConnectionString(sourceUrl, s.token);
+  const csEl = document.getElementById('s-cs');
+  if (cs) {
+    csEl.textContent = cs;
+  } else {
+    csEl.textContent = '— (start tunnel or connect LAN first)';
+    csEl.style.color = '#8b949e';
+  }
 }
 
 function renderProjects(allProjects, sharedProjects) {
@@ -108,20 +156,38 @@ function renderProjects(allProjects, sharedProjects) {
     card.innerHTML = '<div style="color:#8b949e">No git repos found in PROJECTS_ROOT.</div>';
     return;
   }
-  const sharedNames = new Set(sharedProjects.map(p => p.name));
+  const sharedMap = new Map(sharedProjects.map(p => [p.name, p]));
+
   card.innerHTML = allProjects.map(p => {
-    const isShared = p.shared || sharedNames.has(p.name);
+    const sharedEntry = sharedMap.get(p.name);
+    const isShared = p.shared || !!sharedEntry;
+    const currentRole = sharedEntry ? (sharedEntry.role || '') : '';
+    const hasPeers = sharedEntry && sharedEntry.peers && sharedEntry.peers.length > 0;
+
+    const nameWithBadge = isShared
+      ? `${esc(p.name)} <span class="badge badge-green" style="margin-left:4px">shared</span>`
+      : esc(p.name);
+
+    const controls = isShared
+      ? `<div class="project-controls">
+          <select onchange="setProjectRole('${esc(p.name)}', this.value)" title="Set sync role for this project">
+            <option value=""${currentRole === '' ? ' selected' : ''}>Symmetric</option>
+            <option value="leader"${currentRole === 'leader' ? ' selected' : ''}>Leader</option>
+            <option value="follower"${currentRole === 'follower' ? ' selected' : ''}>Follower</option>
+          </select>
+          ${hasPeers ? `<button class="secondary" onclick="checkSync('${esc(p.name)}', this)">↕ Sync</button>` : ''}
+          <button class="danger" onclick="unshare('${esc(p.name)}')">Unshare</button>
+         </div>`
+      : `<div class="project-controls">
+          <button onclick="share('${esc(p.path)}', '${esc(p.name)}')">Share</button>
+         </div>`;
+
     return `<div class="project-row">
-      <div>
-        <div class="project-name">${esc(p.name)}
-          ${isShared ? '<span class="badge badge-green" style="margin-left:6px">shared</span>' : ''}
-        </div>
-        <div class="project-path">${esc(p.path)}</div>
+      <div class="project-info">
+        <div class="project-name">${nameWithBadge}<span id="sync-${esc(p.name)}" class="sync-indicator"></span></div>
+        <div class="project-path" title="${esc(p.path)}">${esc(p.path)}</div>
       </div>
-      ${isShared
-        ? `<button class="danger" onclick="unshare('${esc(p.name)}')">Unshare</button>`
-        : `<button onclick="share('${esc(p.path)}', '${esc(p.name)}')">Share</button>`
-      }
+      ${controls}
     </div>`;
   }).join('');
 }
@@ -133,13 +199,49 @@ function renderPeers(peers) {
     return;
   }
   card.innerHTML = peers.map(p =>
-    `<div class="project-row">
-      <div class="project-name">${esc(p.name)}</div>
-      <div class="val">${esc(p.url)}</div>
-      <span class="badge ${p.role ? 'badge-blue' : 'badge-gray'}">${p.role || 'symmetric'}</span>
+    `<div class="peer-card">
+      <div class="peer-header">
+        <span style="font-weight:bold">${esc(p.name)}</span>
+        <span class="val" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.url)}</span>
+      </div>
+      <div class="peer-projects" id="peer-proj-${esc(p.name)}">
+        <span style="color:#8b949e;font-size:0.8rem">Loading peer projects…</span>
+      </div>
     </div>`
   ).join('');
+
+  // Fetch each peer's projects asynchronously
+  for (const p of peers) {
+    loadPeerProjects(p.name);
+  }
 }
+
+async function loadPeerProjects(peerName) {
+  const el = document.getElementById('peer-proj-' + peerName);
+  if (!el) return;
+  try {
+    const data = await fetch(`/api/peer-status?peer=${encodeURIComponent(peerName)}`).then(r => r.json());
+    if (data.error) {
+      el.innerHTML = `<span class="peer-project-item" style="color:#f85149">Offline: ${esc(data.error)}</span>`;
+      return;
+    }
+    const shared = data.shared || [];
+    if (!shared.length) {
+      el.innerHTML = '<span class="peer-project-item">No projects shared by peer.</span>';
+      return;
+    }
+    el.innerHTML = shared.map(proj =>
+      `<div class="peer-project-item">
+        <span class="badge badge-gray" style="margin-right:4px">${esc(proj.name)}</span>
+        ${proj.role ? `<span class="badge badge-blue">${esc(proj.role)}</span>` : ''}
+      </div>`
+    ).join('');
+  } catch (e) {
+    el.innerHTML = `<span class="peer-project-item" style="color:#f85149">Could not reach peer: ${esc(e.message)}</span>`;
+  }
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────────
 
 async function share(repoPath, name) {
   const resp = await fetch('/api/share', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: repoPath, name }) });
@@ -156,27 +258,80 @@ async function unshare(name) {
   else load();
 }
 
-async function doConnect() {
-  const url = document.getElementById('c-url').value.trim();
-  const token = document.getElementById('c-token').value.trim();
-  const name = document.getElementById('c-name').value.trim() || 'peer';
-  const role = document.getElementById('c-role').value || null;
-  const msg = document.getElementById('connect-msg');
+async function setProjectRole(name, role) {
+  const resp = await fetch('/api/project-role', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, role: role || null })
+  });
+  const data = await resp.json();
+  if (data.error) alert('Error setting role: ' + data.error);
+  // No full reload needed — role is purely local state, already reflected in dropdown
+}
 
-  if (!url) { msg.innerHTML = '<span class="error">Peer URL is required</span>'; return; }
+async function checkSync(projectName, btn) {
+  const indicator = document.getElementById('sync-' + projectName);
+  if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> ↻</span>';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+
+  try {
+    const data = await fetch(`/api/sync-status?project=${encodeURIComponent(projectName)}&remote=peer`).then(r => r.json());
+    if (!indicator) return;
+    if (data.error) {
+      indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">err</span>`;
+    } else {
+      const { state, ahead, behind } = data;
+      let badge = '';
+      if (state === 'in-sync')      badge = `<span class="badge badge-green">✓ in sync</span>`;
+      else if (state === 'local-ahead')  badge = `<span class="badge badge-blue">↑${ahead} ahead</span>`;
+      else if (state === 'remote-ahead') badge = `<span class="badge badge-yellow">↓${behind} behind</span>`;
+      else                                badge = `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
+      indicator.innerHTML = ' ' + badge;
+    }
+  } catch (e) {
+    if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">err</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↕ Sync'; }
+  }
+}
+
+async function doConnect() {
+  const csInput = document.getElementById('c-cs').value.trim();
+  const name    = document.getElementById('c-name').value.trim() || 'peer';
+  const msg     = document.getElementById('connect-msg');
+
+  if (!csInput) { msg.innerHTML = '<span class="error">Connection string is required</span>'; return; }
+
+  // Parse cs1: connection string
+  let peerUrl, peerToken;
+  const parsed = parseConnectionString(csInput);
+  if (parsed) {
+    peerUrl   = parsed.url;
+    peerToken = parsed.token;
+  } else {
+    // Fallback: treat as raw URL (may have embedded credentials)
+    try {
+      const u = new URL(csInput);
+      if (u.password) { peerToken = u.password; u.username = ''; u.password = ''; }
+      peerUrl = u.toString().replace(/\/$/, '');
+    } catch {
+      msg.innerHTML = '<span class="error">Invalid connection string — paste the cs1:… value from the peer\'s UI</span>';
+      return;
+    }
+  }
 
   msg.innerHTML = '<span style="color:#8b949e">Connecting…</span>';
   try {
     const resp = await fetch('/api/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, token, name, role })
+      body: JSON.stringify({ url: peerUrl, token: peerToken, name })
     });
     const data = await resp.json();
     if (data.error) {
       msg.innerHTML = `<span class="error">Error: ${esc(data.error)}</span>`;
     } else {
-      msg.innerHTML = '<span class="success">Connected! Both sides wired.</span>';
+      msg.innerHTML = '<span class="success">Connected! Both sides wired. Set per-project roles in the projects list below.</span>';
       load();
     }
   } catch(e) {
@@ -186,7 +341,7 @@ async function doConnect() {
 
 function copy(id) {
   const text = document.getElementById(id).textContent;
-  if (text && text !== '—') navigator.clipboard.writeText(text).catch(() => {});
+  if (text && text !== '—' && !text.startsWith('—')) navigator.clipboard.writeText(text).catch(() => {});
 }
 
 function esc(s) {

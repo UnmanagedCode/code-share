@@ -168,21 +168,29 @@ program
 // ─── connect ──────────────────────────────────────────────────────────────────
 program
   .command('connect <url>')
-  .description('Wire peer in both directions via handshake')
-  .option('--token <t>', 'peer auth token')
+  .description('Wire peer in both directions via handshake. Accepts a cs1: connection string or a plain URL.')
+  .option('--token <t>', 'peer auth token (not needed when using a cs1: connection string)')
   .option('--name <n>', 'local name for this peer', 'peer')
-  .option('--leader', 'declare this instance as leader for all shared projects')
-  .option('--follower', 'declare this instance as follower')
+  .option('--leader', 'set this instance as leader for all shared projects after connecting')
+  .option('--follower', 'set this instance as follower for all shared projects after connecting')
   .action(async (url, opts) => {
-    let role = null;
-    if (opts.leader) role = 'leader';
-    else if (opts.follower) role = 'follower';
-
-    // Strip auth from URL if token given separately
     let peerBaseUrl = url;
-    let peerToken = opts.token;
-    if (!peerToken) {
-      // Try to extract from URL
+    let peerToken = opts.token || null;
+
+    // Parse cs1: connection string (embeds url + token)
+    if (url.startsWith('cs1:')) {
+      try {
+        const b64 = url.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+        const pad = b64 + '=='.slice(0, (4 - b64.length % 4) % 4);
+        const payload = JSON.parse(Buffer.from(pad, 'base64').toString('utf8'));
+        peerBaseUrl = payload.url;
+        peerToken   = payload.token;
+      } catch (e) {
+        console.error('Connect failed: invalid cs1: connection string —', e.message);
+        process.exit(1);
+      }
+    } else if (!peerToken) {
+      // Try to extract token from embedded URL credentials
       try {
         const u = new URL(url);
         if (u.password) { peerToken = u.password; u.username = ''; u.password = ''; peerBaseUrl = u.toString(); }
@@ -190,11 +198,22 @@ program
     }
 
     try {
-      const result = await connectPeer(peerBaseUrl, peerToken, { name: opts.name, role });
+      const result = await connectPeer(peerBaseUrl, peerToken, { name: opts.name });
       console.log(`Connected to peer "${opts.name}".`);
       if (result && result.shared && result.shared.length > 0) {
         console.log(`Peer shares: ${result.shared.join(', ')}`);
       }
+
+      // Apply per-project role if --leader or --follower was given
+      if (opts.leader || opts.follower) {
+        const role = opts.leader ? 'leader' : 'follower';
+        const shared = loadRegistry();
+        for (const proj of shared) {
+          registry.updateProject(proj.name, { role });
+        }
+        console.log(`Role set to "${role}" for all ${shared.length} shared project(s).`);
+      }
+
       console.log('Both directions wired — each side can now sync independently.');
     } catch (e) {
       console.error('Connect failed:', e.message);
