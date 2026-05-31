@@ -1,5 +1,7 @@
 'use strict';
-const { execSync, spawnSync } = require('child_process');
+const http = require('http');
+const https = require('https');
+const { spawnSync } = require('child_process');
 const { loadRegistry } = require('./config');
 
 function run(cmd, cwd, opts = {}) {
@@ -17,7 +19,48 @@ function getConflictingFiles(repoPath) {
   return r.stdout.split('\n').map(l => l.trim()).filter(Boolean);
 }
 
-function sync(projectName, opts = {}) {
+// Try to fetch the peer's current leader flag for this project from their live /control/status.
+// Falls back to the value stored in the registry if the peer is unreachable.
+function fetchPeerLeaderFlag(proj, remoteName) {
+  const peerEntry = (proj.peers || []).find(p => p.name === remoteName);
+  if (!peerEntry) return Promise.resolve(false);
+  const stored = typeof peerEntry.leader === 'boolean' ? peerEntry.leader : false;
+
+  return new Promise((resolve) => {
+    try {
+      const statusUrl = peerEntry.url.replace(/\/?$/, '') + '/control/status';
+      const u = new URL(statusUrl);
+      const opts = {
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: '/control/status',
+        method: 'GET',
+        headers: { 'Authorization': `Basic ${Buffer.from(`x:${peerEntry.token}`).toString('base64')}` }
+      };
+      const mod = u.protocol === 'https:' ? https : http;
+      const req = mod.request(opts, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const ps = (data.shared || []).find(s => s.name === proj.name);
+            resolve(typeof ps?.leader === 'boolean' ? ps.leader : stored);
+          } catch {
+            resolve(stored);
+          }
+        });
+      });
+      req.on('error', () => resolve(stored));
+      req.setTimeout(5000, () => { req.destroy(); resolve(stored); });
+      req.end();
+    } catch {
+      resolve(stored);
+    }
+  });
+}
+
+async function sync(projectName, opts = {}) {
   const { remote = 'peer', branch, useRebase = false } = opts;
 
   const reg = loadRegistry();
@@ -43,11 +86,13 @@ function sync(projectName, opts = {}) {
     throw new Error(`git fetch failed:\n${fetchResult.stderr}`);
   }
 
-  // Step 2: integrate — strategy depends on role
-  const role = proj.role; // null=symmetric, 'leader', 'follower'
+  // Step 2: determine sync mode by comparing both sides' leader flags
+  const myLeader   = proj.leader ?? false;
+  const peerLeader = await fetchPeerLeaderFlag(proj, remote);
+  // isFollower: I am not the leader and the peer is — fast-forward to their tip
+  const isFollower = !myLeader && peerLeader;
 
   if (useRebase) {
-    // Advanced opt-out: rebase
     console.log('Rebasing onto FETCH_HEAD...');
     const r = run('git rebase FETCH_HEAD', repoPath);
     if (r.code !== 0) {
@@ -55,12 +100,11 @@ function sync(projectName, opts = {}) {
       run('git rebase --abort', repoPath);
       throw new Error(`Rebase conflict. Aborted cleanly. Conflicting files:\n${conflicts.map(f => '  ' + f).join('\n') || '  (see git status for details)'}`);
     }
-  } else if (role === 'follower') {
+  } else if (isFollower) {
     // Fast-forward to leader's tip; rebase local commits on top if needed
     console.log('Follower fast-forward sync...');
     const ffResult = run('git merge --ff-only FETCH_HEAD', repoPath);
     if (ffResult.code !== 0) {
-      // Local commits exist — rebase them on top of leader
       console.log('Cannot fast-forward; rebasing local commits on top of leader tip...');
       const rebaseResult = run('git rebase FETCH_HEAD', repoPath);
       if (rebaseResult.code !== 0) {
@@ -70,8 +114,8 @@ function sync(projectName, opts = {}) {
       }
     }
   } else {
-    // Symmetric (null) or leader ingesting follower: merge --no-ff
-    const label = role === 'leader' ? 'Leader ingesting follower' : 'Symmetric merge';
+    // Symmetric (both same flag) or leader ingesting follower — merge --no-ff
+    const label = (myLeader && !peerLeader) ? 'Leader ingesting follower' : 'Symmetric merge';
     console.log(`${label} (merge --no-ff)...`);
     const mergeResult = run('git merge --no-ff FETCH_HEAD -m "code-share: sync merge"', repoPath);
     if (mergeResult.code !== 0) {
@@ -83,7 +127,6 @@ function sync(projectName, opts = {}) {
 
   console.log('Sync complete.');
 
-  // Show ahead/behind info
   const log = run(`git log --oneline -3`, repoPath);
   if (log.stdout.trim()) {
     console.log('Recent commits:\n' + log.stdout.trim().split('\n').map(l => '  ' + l).join('\n'));

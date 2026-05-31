@@ -27,6 +27,33 @@ function addRemote(repoPath, name, url) {
   }
 }
 
+function getJSON(url, token) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const opts = {
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname + (u.search || ''),
+      method: 'GET',
+      headers: {
+        'Authorization': `Basic ${Buffer.from(`x:${token}`).toString('base64')}`
+      }
+    };
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.request(opts, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (res.statusCode >= 400) { reject(new Error(`HTTP ${res.statusCode}: ${text.trim()}`)); return; }
+        try { resolve(JSON.parse(text)); } catch { resolve(text); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 function postJSON(url, body, token) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -72,11 +99,11 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
     throw new Error('No selfUrl set — run `serve` first so your URL is known before connecting');
   }
 
-  // Build per-project roles map from our current registry
+  // Build per-project leaders map from our current registry
   const reg = loadRegistry();
-  const projectRoles = {};
+  const projectLeaders = {};
   for (const proj of reg) {
-    projectRoles[proj.name] = proj.role;
+    projectLeaders[proj.name] = proj.leader ?? false;
   }
 
   // POST our info to peer's control endpoint
@@ -87,13 +114,13 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
       url: selfUrl,
       token: selfToken,
       name,
-      projectRoles
+      projectLeaders
     }, peerToken);
   } catch (e) {
     throw new Error(`Failed to reach peer at ${registerUrl}: ${e.message}`);
   }
 
-  // Save peer in our instance config (role removed — now per-project in registry)
+  // Save peer in our instance config
   const peers = cfg.peers || [];
   const existingIdx = peers.findIndex(p => p.name === name);
   const peerEntry = { name, url: peerBaseUrl, token: peerToken };
@@ -102,16 +129,27 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   cfg.peers = peers;
   saveConfig(cfg);
 
+  // Fetch peer's current project leader flags so we can store them
+  let peerLeaders = {};
+  try {
+    const statusUrl = peerBaseUrl.replace(/\/?$/, '') + '/control/status';
+    const peerStatus = await getJSON(statusUrl, peerToken);
+    for (const s of (peerStatus.shared || [])) {
+      peerLeaders[s.name] = s.leader ?? false;
+    }
+  } catch {
+    // peer status unreachable; peerEntry.leader defaults to false
+  }
+
   // Add peer to all shared projects in registry
   for (const proj of reg) {
     const authedPeerUrl = authedUrl(peerBaseUrl + '/' + proj.name + '.git', peerToken);
     addRemote(proj.path, name, authedPeerUrl);
 
-    const pe = { name, url: peerBaseUrl, token: peerToken, role: null };
+    const pe = { name, url: peerBaseUrl, token: peerToken, leader: peerLeaders[proj.name] ?? false };
     const existingPeer = proj.peers.findIndex(p => p.name === name);
     if (existingPeer >= 0) proj.peers[existingPeer] = pe;
     else proj.peers.push(pe);
-    // Per-project role (proj.role) is managed separately via /api/project-role
   }
   saveRegistry(reg);
 

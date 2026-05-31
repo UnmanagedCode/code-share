@@ -128,19 +128,18 @@ async function handleAPI(req, res) {
     return true;
   }
 
-  // Set per-project role
-  if (req.method === 'POST' && pathname === '/api/project-role') {
+  // Set per-project leader flag
+  if (req.method === 'POST' && pathname === '/api/project-leader') {
     let body;
     try { body = JSON.parse(await readBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
-    const { name, role } = body;
+    const { name, leader } = body;
     if (!name) { sendJSON(res, 400, { error: 'name is required' }); return true; }
-    const validRoles = ['leader', 'follower', null, ''];
-    if (!validRoles.includes(role)) { sendJSON(res, 400, { error: 'role must be leader, follower, or null' }); return true; }
+    if (typeof leader !== 'boolean') { sendJSON(res, 400, { error: 'leader must be a boolean' }); return true; }
     try {
-      registry.updateProject(name, { role: role || null });
+      registry.updateProject(name, { leader });
       sendJSON(res, 200, { ok: true });
     } catch (e) {
       sendJSON(res, 400, { error: e.message });

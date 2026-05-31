@@ -38,33 +38,22 @@ async function handleRegister(req, res) {
     return;
   }
 
-  const { url: peerUrl, token: peerToken, name: peerName, role: legacyRole, projectRoles } = body;
+  const { url: peerUrl, token: peerToken, name: peerName, projectLeaders, projectRoles } = body;
   if (!peerUrl || !peerToken || !peerName) {
     sendJSON(res, 400, { error: 'Missing required fields: url, token, name' });
     return;
   }
 
-  // projectRoles: { [projName]: 'leader'|'follower'|null }
-  // Fall back to legacy global role for backward compat with old clients.
-  const roles = projectRoles || {};
+  // projectLeaders: { [projName]: boolean }
+  // Accept old projectRoles for backward compat (string 'leader' → true, else → false).
+  const leaders = projectLeaders
+    || Object.fromEntries(Object.entries(projectRoles || {}).map(([k, v]) => [k, v === 'leader']));
 
-  // Check for leader conflict per-project
   const reg = loadRegistry();
-  for (const proj of reg) {
-    const effectiveRole = roles[proj.name] !== undefined ? roles[proj.name] : legacyRole;
-    if (effectiveRole === 'leader') {
-      const existingLeader = proj.peers.find(p => p.role === 'leader' && p.name !== peerName);
-      if (existingLeader) {
-        sendJSON(res, 409, { error: `Project "${proj.name}" already has a leader: ${existingLeader.name}` });
-        return;
-      }
-    }
-  }
 
-  // Add peer to all shared projects with per-project role
+  // Add peer to all shared projects with per-project leader boolean
   for (const proj of reg) {
-    const effectiveRole = roles[proj.name] !== undefined ? roles[proj.name] : (legacyRole || null);
-    const peerEntry = { name: peerName, url: peerUrl, token: peerToken, role: effectiveRole };
+    const peerEntry = { name: peerName, url: peerUrl, token: peerToken, leader: leaders[proj.name] ?? false };
     const existing = proj.peers.findIndex(p => p.name === peerName);
     if (existing >= 0) proj.peers[existing] = peerEntry;
     else proj.peers.push(peerEntry);
@@ -98,7 +87,7 @@ function handleStatus(req, res) {
     token: cfg.token,
     selfUrl: cfg.selfUrl,
     tunnelUrl: cfg.tunnelUrl,
-    shared: reg.map(p => ({ name: p.name, path: p.path, role: p.role })),
+    shared: reg.map(p => ({ name: p.name, path: p.path, leader: p.leader })),
     peers: cfg.peers || []
   });
 }

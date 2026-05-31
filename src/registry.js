@@ -34,7 +34,7 @@ function addProject(absPath, name) {
   try { fs.unlinkSync(symlinkPath); } catch {}
   fs.symlinkSync(absPath, symlinkPath);
 
-  const entry = { name, path: absPath, role: null, peers: [] };
+  const entry = { name, path: absPath, leader: false, peers: [] };
   reg.push(entry);
   saveRegistry(reg);
   return entry;
@@ -68,13 +68,7 @@ function updateProject(name, updates) {
 function addPeerToProject(projectName, peer) {
   const reg = loadRegistry();
   const proj = reg.find(p => p.name === projectName);
-  if (!proj) return; // silently skip if project not found
-
-  // Check for leader conflict
-  if (peer.role === 'leader') {
-    const existingLeader = proj.peers.find(p => p.role === 'leader');
-    if (existingLeader) throw new Error(`Project "${projectName}" already has a leader: ${existingLeader.name}`);
-  }
+  if (!proj) return;
 
   const existing = proj.peers.findIndex(p => p.name === peer.name);
   if (existing >= 0) proj.peers[existing] = peer;

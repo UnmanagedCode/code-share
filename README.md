@@ -10,7 +10,7 @@ Peer-to-peer read-only Git repo sharing over LAN or the internet. Each party ser
 - **Multi-project**: one running instance serves all shared repos at their own `/<name>.git` URLs.
 - **Single token**: one instance-level token gates access to all served repos.
 - **Single connection string**: one `cs1:…` string (shown in the web UI) carries the tunnel URL and token — paste it on the other end to connect.
-- **Per-project roles**: leader/follower/symmetric is set independently per shared project, not globally.
+- **Per-project leader flag**: each shared project has a boolean "am I the leader?" (default false). Sync mode is derived at sync time by comparing both sides' flags.
 
 ## Prerequisites
 
@@ -66,25 +66,26 @@ node bin/code-share.js share ../project-beta --as beta
 node bin/code-share.js list
 ```
 
-### Per-project leader / follower mode
+### Per-project leader flag and sync mode
 
-Roles are set **per project** after connecting, not globally at connect time.
+Each shared project has a single boolean: **"am I the leader for this project?"** (default false). There is no stored "follower" or "symmetric" value. The sync strategy is computed at sync time by comparing both sides' current leader flag.
 
-**Via web UI:** After connecting, each shared project row shows a role dropdown — select Leader, Follower, or Symmetric.
+**Via web UI:** Each shared project row shows a **Leader** checkbox. Tick it to mark this side as the leader for that project.
 
-**Via CLI** (sets role for all shared projects at connect time, same as selecting via UI):
+**Via CLI** (applies to all shared projects at connect time):
 ```sh
-node bin/code-share.js connect cs1:<string> --leader    # we are leader for all shared projects
-node bin/code-share.js connect cs1:<string> --follower  # we are follower for all shared projects
+node bin/code-share.js connect cs1:<string> --leader    # leader=true for all shared projects
+node bin/code-share.js connect cs1:<string> --follower  # leader=false for all shared projects
 ```
 
-| Role | Sync behavior |
-|------|--------------|
-| **Symmetric** (default) | Both sides merge with `--no-ff`. Visible merge commits on each sync. |
-| **Leader** | Ingests follower's commits via `merge --no-ff`. |
-| **Follower** | Fast-forwards to leader's tip. Rebases local commits on top if needed. |
+| My `leader` | Peer `leader` | Derived mode | Sync behavior |
+|-------------|---------------|--------------|---------------|
+| false | false | Symmetric | Both sides `merge --no-ff`. Visible merge commits on each sync. |
+| true  | true  | Symmetric | Both sides `merge --no-ff`. |
+| true  | false | Leader side | I ingest peer's commits via `merge --no-ff`. |
+| false | true  | Follower side | I fast-forward to peer's tip. Rebases local commits on top if needed. |
 
-Two peers both claiming leader for the same project → rejected (409).
+The peer's current leader flag is fetched live from their `/control/status` at sync time, with a fallback to the value stored at connect time if the peer is unreachable.
 
 ## CLI reference
 
@@ -123,11 +124,11 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 | Section | What it shows |
 |---------|--------------|
 | **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers) |
-| **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project role selector, sync state |
+| **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project Leader checkbox |
 | **Connect a Peer** | Paste a peer's `cs1:` connection string + give the peer a local name |
-| **Connected Peers** | Each peer with their shared project catalog (fetched live from the peer's `/control/status`) |
+| **Connected Peers** | Each peer with syncable projects (Sync button + ahead/behind badge per project) and any additional projects the peer exposes |
 
-**Sync state badge** (per project, after clicking ↕ Sync):
+**Sync state badge** (per syncable project under each peer, after clicking ↕ Sync):
 - `✓ in sync` — identical tips
 - `↑N ahead` — you have N commits the peer doesn't
 - `↓N behind` — peer has N commits you don't
@@ -150,15 +151,15 @@ cs1:<base64url({"url":"https://host.trycloudflare.com","token":"<hex>"})>
 ```
 External HTTP server  0.0.0.0:<port>    ← auth (Basic x:<token>) + receive-pack block
   └─ git.handle(req,res)                ← node-git-server (single process, no proxy)
-  └─ /control/register POST             ← peer handshake (accepts projectRoles map)
-  └─ /control/status   GET             ← catalog for authed peers
+  └─ /control/register POST             ← peer handshake (accepts projectLeaders map)
+  └─ /control/status   GET             ← catalog for authed peers (exposes per-project leader boolean)
 
 Web UI               127.0.0.1:<uiPort> ← never tunneled, localhost only
   └─ /api/status                        ← config + registry
   └─ /api/projects                      ← scanned git repos
   └─ /api/share|unshare                 ← manage registry
   └─ /api/connect                       ← initiate peer handshake
-  └─ /api/project-role                  ← set per-project sync role
+  └─ /api/project-leader                ← set per-project leader boolean
   └─ /api/peer-status?peer=<name>       ← proxy to peer's /control/status
   └─ /api/sync-status?project=<name>    ← git fetch + ahead/behind count
 
@@ -167,7 +168,7 @@ Tunnel               (cloudflared/localtunnel) → wraps only the git server por
 
 State lives in `data/` inside the code-share project directory (gitignored):
 - `data/config.json` — token, ports, tunnel, peer list (url + token per peer), last known URLs
-- `data/registry.json` — shared projects: `{ name, path, role, peers[] }` — role is per-project
+- `data/registry.json` — shared projects: `{ name, path, leader, peers[] }` — `leader` is a boolean per project; `peers[].leader` stores the last-known leader flag for each peer
 - `data/serve/<name>.git` → symlink to actual repo (node-git-server root)
 
 Target repos are never modified by code-share (peer git remotes in their `.git/config` are standard git, not code-share files).

@@ -51,7 +51,26 @@ function loadRegistry() {
     fs.writeFileSync(REGISTRY_FILE, JSON.stringify([], null, 2));
     return [];
   }
-  return JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+  const reg = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+
+  // Migrate old role: string → leader: boolean (one-time, transparent)
+  let dirty = false;
+  for (const entry of reg) {
+    if ('role' in entry && !('leader' in entry)) {
+      entry.leader = entry.role === 'leader';
+      delete entry.role;
+      dirty = true;
+    }
+    for (const p of (entry.peers || [])) {
+      if ('role' in p) {
+        p.leader = p.role === 'leader';
+        delete p.role;
+        dirty = true;
+      }
+    }
+  }
+  if (dirty) saveRegistry(reg);
+  return reg;
 }
 
 function saveRegistry(arr) {
