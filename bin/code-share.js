@@ -141,10 +141,10 @@ program
     for (const p of shared) {
       console.log(`  ${p.name}  →  ${p.path}`);
       console.log(`    URL: ${base}/${p.name}.git`);
-      if (p.role) console.log(`    Role: ${p.role}`);
+      if (p.leader) console.log(`    Leader: yes`);
       if (p.peers && p.peers.length > 0) {
         for (const peer of p.peers) {
-          console.log(`    Peer: ${peer.name} (${peer.url}) role=${peer.role || 'symmetric'}`);
+          console.log(`    Peer: ${peer.name} (${peer.url}) leader=${peer.leader ?? false}`);
         }
       }
     }
@@ -171,8 +171,8 @@ program
   .description('Wire peer in both directions via handshake. Accepts a cs1: connection string or a plain URL.')
   .option('--token <t>', 'peer auth token (not needed when using a cs1: connection string)')
   .option('--name <n>', 'local name for this peer', 'peer')
-  .option('--leader', 'set this instance as leader for all shared projects after connecting')
-  .option('--follower', 'set this instance as follower for all shared projects after connecting')
+  .option('--leader', 'mark this side as leader for all shared projects (leader=true)')
+  .option('--follower', 'mark this side as non-leader for all shared projects (leader=false)')
   .action(async (url, opts) => {
     let peerBaseUrl = url;
     let peerToken = opts.token || null;
@@ -204,14 +204,14 @@ program
         console.log(`Peer shares: ${result.shared.join(', ')}`);
       }
 
-      // Apply per-project role if --leader or --follower was given
+      // Apply per-project leader flag if --leader or --follower was given
       if (opts.leader || opts.follower) {
-        const role = opts.leader ? 'leader' : 'follower';
+        const leader = !!opts.leader;
         const shared = loadRegistry();
         for (const proj of shared) {
-          registry.updateProject(proj.name, { role });
+          registry.updateProject(proj.name, { leader });
         }
-        console.log(`Role set to "${role}" for all ${shared.length} shared project(s).`);
+        console.log(`Leader set to ${leader} for all ${shared.length} shared project(s).`);
       }
 
       console.log('Both directions wired — each side can now sync independently.');
@@ -228,9 +228,9 @@ program
   .option('--remote <name>', 'peer remote name', 'peer')
   .option('--branch <b>', 'remote branch to fetch')
   .option('--rebase', 'use rebase instead of merge (advanced)')
-  .action((project, opts) => {
+  .action(async (project, opts) => {
     try {
-      sync(project, {
+      await sync(project, {
         remote: opts.remote,
         branch: opts.branch,
         useRebase: opts.rebase || false
@@ -262,11 +262,11 @@ program
       console.log('  (none — use `share <path>` to add)');
     } else {
       for (const p of shared) {
-        console.log(`  ${p.name}  [${p.role || 'symmetric'}]`);
+        console.log(`  ${p.name}  [${p.leader ? 'leader' : 'sync'}]`);
         console.log(`    Path: ${p.path}`);
         if (p.peers && p.peers.length > 0) {
           for (const peer of p.peers) {
-            console.log(`    Peer: ${peer.name}  role=${peer.role || 'symmetric'}  ${peer.url}`);
+            console.log(`    Peer: ${peer.name}  leader=${peer.leader ?? false}  ${peer.url}`);
           }
         }
       }
@@ -278,7 +278,7 @@ program
       console.log('  (none — use `connect <url>` to add)');
     } else {
       for (const p of peers) {
-        console.log(`  ${p.name}  role=${p.role || 'symmetric'}  ${p.url}`);
+        console.log(`  ${p.name}  ${p.url}`);
       }
     }
   });

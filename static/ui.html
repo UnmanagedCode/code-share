@@ -19,24 +19,23 @@
   .badge-blue   { background: #1c3452; color: #58a6ff; }
   .badge-yellow { background: #3d2e00; color: #d29922; }
   .badge-orange { background: #3d1f00; color: #f0883e; }
-  /* Req 1 fix: prevent buttons from being pushed outside flex containers */
   button { background: #238636; color: #fff; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 0.85rem; flex-shrink: 0; }
   button:hover { background: #2ea043; }
   button.danger { background: #b62324; }
   button.danger:hover { background: #da3633; }
   button.secondary { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
   button.secondary:hover { background: #30363d; }
-  input, select { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 6px 10px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; width: 100%; }
+  input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 6px 10px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; width: 100%; }
   .copy-btn { min-width: 60px; background: #1c3452; color: #58a6ff; border: 1px solid #1c3452; }
   .copy-btn:hover { background: #264a70; }
-  /* Req 1 fix: text wrapper fills available space and allows shrinking */
-  .project-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid #21262d; }
+  .project-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0; border-bottom: 1px solid #21262d; }
   .project-row:last-child { border-bottom: none; }
-  .project-row > .project-info { flex: 1; min-width: 0; overflow: hidden; }
+  .project-row > .project-info { flex: 1 1 200px; min-width: 0; overflow: hidden; }
   .project-name { font-weight: bold; }
-  /* Req 1 fix: truncate long paths instead of overflowing */
   .project-path { color: #8b949e; font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .project-controls { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+  .project-controls { display: flex; align-items: center; gap: 0.5rem; flex: 0 0 auto; }
+  .leader-toggle { display: flex; align-items: center; gap: 0.25rem; color: #e6edf3; font-size: 0.85rem; cursor: pointer; white-space: nowrap; user-select: none; }
+  .leader-toggle input[type="checkbox"] { width: auto; margin: 0; }
   .error { color: #f85149; font-size: 0.85rem; margin-top: 0.5rem; }
   .success { color: #3fb950; font-size: 0.85rem; margin-top: 0.5rem; }
   .section-row { display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 0.75rem; }
@@ -47,8 +46,8 @@
   .peer-card:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
   .peer-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; }
   .peer-projects { padding-left: 1rem; margin-top: 0.35rem; }
-  .peer-project-item { font-size: 0.8rem; color: #8b949e; padding: 2px 0; }
-  .sync-indicator { font-size: 0.75rem; margin-left: 4px; }
+  .peer-sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 3px 0; font-size: 0.8rem; }
+  .sync-indicator { font-size: 0.75rem; margin-left: 2px; }
 </style>
 </head>
 <body>
@@ -87,7 +86,7 @@
 let status = null;
 let sharedRegistry = [];
 
-// ── Connection string helpers (Req 5 + 6) ───────────────────────────────────
+// ── Connection string helpers ────────────────────────────────────────────────
 
 function makeConnectionString(rawUrl, token) {
   if (!rawUrl || rawUrl === '—') return null;
@@ -138,7 +137,6 @@ function renderStatus(s) {
   document.getElementById('s-lan').textContent    = lanRaw    || '—';
   document.getElementById('s-tunnel').textContent = tunnelRaw || '—';
 
-  // Generate connection string from tunnel URL (preferred) or LAN URL
   const sourceUrl = tunnelRaw || lanRaw;
   const cs = makeConnectionString(sourceUrl, s.token);
   const csEl = document.getElementById('s-cs');
@@ -161,8 +159,7 @@ function renderProjects(allProjects, sharedProjects) {
   card.innerHTML = allProjects.map(p => {
     const sharedEntry = sharedMap.get(p.name);
     const isShared = p.shared || !!sharedEntry;
-    const currentRole = sharedEntry ? (sharedEntry.role || '') : '';
-    const hasPeers = sharedEntry && sharedEntry.peers && sharedEntry.peers.length > 0;
+    const isLeader = sharedEntry ? (sharedEntry.leader === true) : false;
 
     const nameWithBadge = isShared
       ? `${esc(p.name)} <span class="badge badge-green" style="margin-left:4px">shared</span>`
@@ -170,12 +167,11 @@ function renderProjects(allProjects, sharedProjects) {
 
     const controls = isShared
       ? `<div class="project-controls">
-          <select onchange="setProjectRole('${esc(p.name)}', this.value)" title="Set sync role for this project">
-            <option value=""${currentRole === '' ? ' selected' : ''}>Symmetric</option>
-            <option value="leader"${currentRole === 'leader' ? ' selected' : ''}>Leader</option>
-            <option value="follower"${currentRole === 'follower' ? ' selected' : ''}>Follower</option>
-          </select>
-          ${hasPeers ? `<button class="secondary" onclick="checkSync('${esc(p.name)}', this)">↕ Sync</button>` : ''}
+          <label class="leader-toggle">
+            <input type="checkbox" ${isLeader ? 'checked' : ''}
+                   onchange="setProjectLeader('${esc(p.name)}', this.checked)">
+            Leader
+          </label>
           <button class="danger" onclick="unshare('${esc(p.name)}')">Unshare</button>
          </div>`
       : `<div class="project-controls">
@@ -184,7 +180,7 @@ function renderProjects(allProjects, sharedProjects) {
 
     return `<div class="project-row">
       <div class="project-info">
-        <div class="project-name">${nameWithBadge}<span id="sync-${esc(p.name)}" class="sync-indicator"></span></div>
+        <div class="project-name">${nameWithBadge}</div>
         <div class="project-path" title="${esc(p.path)}">${esc(p.path)}</div>
       </div>
       ${controls}
@@ -205,12 +201,11 @@ function renderPeers(peers) {
         <span class="val" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.url)}</span>
       </div>
       <div class="peer-projects" id="peer-proj-${esc(p.name)}">
-        <span style="color:#8b949e;font-size:0.8rem">Loading peer projects…</span>
+        <span style="color:#8b949e;font-size:0.8rem">Loading…</span>
       </div>
     </div>`
   ).join('');
 
-  // Fetch each peer's projects asynchronously
   for (const p of peers) {
     loadPeerProjects(p.name);
   }
@@ -219,26 +214,41 @@ function renderPeers(peers) {
 async function loadPeerProjects(peerName) {
   const el = document.getElementById('peer-proj-' + peerName);
   if (!el) return;
+
+  // Projects I share that have this peer registered as a remote
+  const mySyncable = sharedRegistry.filter(p => p.peers && p.peers.some(pe => pe.name === peerName));
+
+  // Render syncable rows immediately — don't wait for peer status
+  el.innerHTML = mySyncable.length
+    ? mySyncable.map(p =>
+        `<div class="peer-sync-row" id="psrow-${esc(peerName)}-${esc(p.name)}">
+          <span class="badge badge-green">${esc(p.name)}</span>
+          <span class="sync-indicator" id="psi-${esc(peerName)}-${esc(p.name)}"></span>
+          <button class="secondary" onclick="checkPeerProjectSync('${esc(p.name)}','${esc(peerName)}',this)">↕ Sync</button>
+        </div>`
+      ).join('')
+    : '<span style="color:#8b949e;font-size:0.8rem">No shared projects synced with this peer yet.</span>';
+
+  // Fetch peer catalog asynchronously and append peer-only projects
   try {
     const data = await fetch(`/api/peer-status?peer=${encodeURIComponent(peerName)}`).then(r => r.json());
     if (data.error) {
-      el.innerHTML = `<span class="peer-project-item" style="color:#f85149">Offline: ${esc(data.error)}</span>`;
+      if (!mySyncable.length) {
+        el.innerHTML = `<span style="color:#f85149;font-size:0.8rem">Offline: ${esc(data.error)}</span>`;
+      }
       return;
     }
-    const shared = data.shared || [];
-    if (!shared.length) {
-      el.innerHTML = '<span class="peer-project-item">No projects shared by peer.</span>';
-      return;
+    const syncableNames = new Set(mySyncable.map(p => p.name));
+    const peerOnly = (data.shared || []).filter(ps => !syncableNames.has(ps.name));
+    if (peerOnly.length) {
+      el.insertAdjacentHTML('beforeend', peerOnly.map(ps =>
+        `<div class="peer-sync-row">
+          <span class="badge badge-gray">${esc(ps.name)}</span>
+          <span style="color:#8b949e;font-size:0.75rem">peer only</span>
+        </div>`
+      ).join(''));
     }
-    el.innerHTML = shared.map(proj =>
-      `<div class="peer-project-item">
-        <span class="badge badge-gray" style="margin-right:4px">${esc(proj.name)}</span>
-        ${proj.role ? `<span class="badge badge-blue">${esc(proj.role)}</span>` : ''}
-      </div>`
-    ).join('');
-  } catch (e) {
-    el.innerHTML = `<span class="peer-project-item" style="color:#f85149">Could not reach peer: ${esc(e.message)}</span>`;
-  }
+  } catch {}
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────────
@@ -258,57 +268,35 @@ async function unshare(name) {
   else load();
 }
 
-async function setProjectRole(name, role) {
-  const resp = await fetch('/api/project-role', {
+async function setProjectLeader(name, leader) {
+  const resp = await fetch('/api/project-leader', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, role: role || null })
+    body: JSON.stringify({ name, leader })
   });
   const data = await resp.json();
-  if (data.error) alert('Error setting role: ' + data.error);
-  // No full reload needed — role is purely local state, already reflected in dropdown
+  if (data.error) alert('Error setting leader: ' + data.error);
 }
 
-async function checkSync(projectName, btn) {
-  const indicator = document.getElementById('sync-' + projectName);
+async function checkPeerProjectSync(projectName, peerName, btn) {
+  const indicator = document.getElementById(`psi-${peerName}-${projectName}`);
   if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> ↻</span>';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
-
-  const entry = sharedRegistry.find(e => e.name === projectName);
-  const peers = (entry && entry.peers) ? entry.peers : [];
-
   try {
-    const results = await Promise.all(peers.map(async peer => {
-      try {
-        const data = await fetch(
-          `/api/sync-status?project=${encodeURIComponent(projectName)}&remote=${encodeURIComponent(peer.name)}`
-        ).then(r => r.json());
-        return { peerName: peer.name, data };
-      } catch (e) {
-        return { peerName: peer.name, data: { error: e.message } };
-      }
-    }));
-
+    const data = await fetch(
+      `/api/sync-status?project=${encodeURIComponent(projectName)}&remote=${encodeURIComponent(peerName)}`
+    ).then(r => r.json());
     if (!indicator) return;
-
-    const multiPeer = peers.length > 1;
-    const badges = results.map(({ peerName, data }) => {
-      let badge;
-      if (data.error) {
-        badge = `<span class="badge badge-gray" title="${esc(data.error)}">err</span>`;
-      } else {
-        const { state, ahead, behind } = data;
-        if (state === 'in-sync')           badge = `<span class="badge badge-green">✓ in sync</span>`;
-        else if (state === 'local-ahead')  badge = `<span class="badge badge-blue">↑${ahead} ahead</span>`;
-        else if (state === 'remote-ahead') badge = `<span class="badge badge-yellow">↓${behind} behind</span>`;
-        else                               badge = `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
-      }
-      return multiPeer
-        ? `<span style="color:#8b949e;font-size:0.75rem">${esc(peerName)}</span> ${badge}`
-        : badge;
-    });
-
-    indicator.innerHTML = ' ' + badges.join(' ');
+    if (data.error) {
+      indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">err</span>`;
+    } else {
+      const { state, ahead, behind } = data;
+      const b = state === 'in-sync'        ? `<span class="badge badge-green">✓ in sync</span>`
+              : state === 'local-ahead'    ? `<span class="badge badge-blue">↑${ahead} ahead</span>`
+              : state === 'remote-ahead'   ? `<span class="badge badge-yellow">↓${behind} behind</span>`
+              : `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
+      indicator.innerHTML = ' ' + b;
+    }
   } catch (e) {
     if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">err</span>`;
   } finally {
@@ -323,14 +311,12 @@ async function doConnect() {
 
   if (!csInput) { msg.innerHTML = '<span class="error">Connection string is required</span>'; return; }
 
-  // Parse cs1: connection string
   let peerUrl, peerToken;
   const parsed = parseConnectionString(csInput);
   if (parsed) {
     peerUrl   = parsed.url;
     peerToken = parsed.token;
   } else {
-    // Fallback: treat as raw URL (may have embedded credentials)
     try {
       const u = new URL(csInput);
       if (u.password) { peerToken = u.password; u.username = ''; u.password = ''; }
@@ -352,7 +338,7 @@ async function doConnect() {
     if (data.error) {
       msg.innerHTML = `<span class="error">Error: ${esc(data.error)}</span>`;
     } else {
-      msg.innerHTML = '<span class="success">Connected! Both sides wired. Set per-project roles in the projects list below.</span>';
+      msg.innerHTML = '<span class="success">Connected! Toggle the Leader checkbox per project if needed.</span>';
       load();
     }
   } catch(e) {
