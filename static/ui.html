@@ -274,20 +274,41 @@ async function checkSync(projectName, btn) {
   if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> ↻</span>';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
 
+  const entry = sharedRegistry.find(e => e.name === projectName);
+  const peers = (entry && entry.peers) ? entry.peers : [];
+
   try {
-    const data = await fetch(`/api/sync-status?project=${encodeURIComponent(projectName)}&remote=peer`).then(r => r.json());
+    const results = await Promise.all(peers.map(async peer => {
+      try {
+        const data = await fetch(
+          `/api/sync-status?project=${encodeURIComponent(projectName)}&remote=${encodeURIComponent(peer.name)}`
+        ).then(r => r.json());
+        return { peerName: peer.name, data };
+      } catch (e) {
+        return { peerName: peer.name, data: { error: e.message } };
+      }
+    }));
+
     if (!indicator) return;
-    if (data.error) {
-      indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">err</span>`;
-    } else {
-      const { state, ahead, behind } = data;
-      let badge = '';
-      if (state === 'in-sync')      badge = `<span class="badge badge-green">✓ in sync</span>`;
-      else if (state === 'local-ahead')  badge = `<span class="badge badge-blue">↑${ahead} ahead</span>`;
-      else if (state === 'remote-ahead') badge = `<span class="badge badge-yellow">↓${behind} behind</span>`;
-      else                                badge = `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
-      indicator.innerHTML = ' ' + badge;
-    }
+
+    const multiPeer = peers.length > 1;
+    const badges = results.map(({ peerName, data }) => {
+      let badge;
+      if (data.error) {
+        badge = `<span class="badge badge-gray" title="${esc(data.error)}">err</span>`;
+      } else {
+        const { state, ahead, behind } = data;
+        if (state === 'in-sync')           badge = `<span class="badge badge-green">✓ in sync</span>`;
+        else if (state === 'local-ahead')  badge = `<span class="badge badge-blue">↑${ahead} ahead</span>`;
+        else if (state === 'remote-ahead') badge = `<span class="badge badge-yellow">↓${behind} behind</span>`;
+        else                               badge = `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
+      }
+      return multiPeer
+        ? `<span style="color:#8b949e;font-size:0.75rem">${esc(peerName)}</span> ${badge}`
+        : badge;
+    });
+
+    indicator.innerHTML = ' ' + badges.join(' ');
   } catch (e) {
     if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">err</span>`;
   } finally {
