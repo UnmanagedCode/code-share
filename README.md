@@ -9,7 +9,7 @@ Peer-to-peer read-only Git repo sharing over LAN or the internet. Each party ser
 - **Nothing shared by default**: a fresh instance exposes zero repos. Use `share` to opt in per project.
 - **Multi-project**: one running instance serves all shared repos at their own `/<name>.git` URLs.
 - **Single token**: one instance-level token gates access to all served repos.
-- **Single connection string**: one `cs1:…` string (shown in the web UI) carries the tunnel URL and token — paste it on the other end to connect.
+- **Single connection string**: one `cs1:…` string (shown in the web UI **and** the CLI `status` command) carries the tunnel URL and token — paste it on the other end to connect.
 - **Per-project leader flag**: each shared project has a boolean "am I the leader?" (default false). Sync mode is derived at sync time by comparing both sides' flags.
 
 ## Prerequisites
@@ -21,24 +21,25 @@ Peer-to-peer read-only Git repo sharing over LAN or the internet. Each party ser
 
 ### LAN two-party flow
 
-**Party A** (serves + waits):
+**Party A** (serves + shares):
 ```sh
 cd ~/cc-projects/code-share
 node bin/code-share.js serve --tunnel none
 # prints: LAN base URL: http://x:<token>@192.168.x.x:9419
-node bin/code-share.js share ../my-project
-# Web UI at http://127.0.0.1:9420 — copy the "Connection" string shown there
+node bin/code-share.js share ../my-project --leader   # --leader optional; default is follower
+# Copy the cs1: Connection string — shown by the web UI (http://127.0.0.1:9420)
+# and by `node bin/code-share.js status`.
 ```
 
-**Party B** (clones, then both stay in sync):
+**Party B** (connects, clones, then both stay in sync):
 ```sh
-# Clone the project from A
-node bin/code-share.js clone http://x:<token>@192.168.x.x:9419/my-project.git --dir ./my-project
-# B also serves
 node bin/code-share.js serve --tunnel none
-node bin/code-share.js share ./my-project
-# Connect using the cs1: string A copied from their web UI
+# Connect using the cs1: string from A (shown in A's web UI or `status`)
 node bin/code-share.js connect cs1:<string-from-A>
+# Clone by peer name (default 'peer') + project name — no URL/token to paste
+node bin/code-share.js clone peer my-project
+# Share it back (sets this side's per-project leader flag; default follower)
+node bin/code-share.js share ./my-project --follower
 ```
 
 Both sides can now `sync`:
@@ -46,14 +47,19 @@ Both sides can now `sync`:
 node bin/code-share.js sync my-project
 ```
 
+> **LAN IP note:** in normal multi-host use the LAN base URL contains the machine's
+> real LAN IP (e.g. `192.168.x.x`). It shows `127.0.0.1` only when both peers run on
+> the **same host** (e.g. local testing on one machine).
+
 ### Internet / tunnel flow
 
 ```sh
 node bin/code-share.js serve --tunnel cloudflared
 node bin/code-share.js share ../my-project
-# Web UI at http://127.0.0.1:9420 — copy the "Connection" string
-# Share the cs1:… string with the other party. They run:
+# Copy the cs1: Connection string — shown in the web UI (http://127.0.0.1:9420)
+# or by `node bin/code-share.js status`. Share it with the other party. They run:
 node bin/code-share.js connect cs1:<string>
+node bin/code-share.js clone peer my-project
 ```
 
 No separate token field needed. The `cs1:` string carries everything.
@@ -66,16 +72,18 @@ node bin/code-share.js share ../project-beta --as beta
 node bin/code-share.js list
 ```
 
+## Sync modes & conflict handling
+
 ### Per-project leader flag and sync mode
 
 Each shared project has a single boolean: **"am I the leader for this project?"** (default false). There is no stored "follower" or "symmetric" value. The sync strategy is computed at sync time by comparing both sides' current leader flag.
 
 **Via web UI:** Each shared project row shows a **Leader** checkbox. Tick it to mark this side as the leader for that project.
 
-**Via CLI** (applies to all shared projects at connect time):
+**Via CLI:** set the flag per project at `share` time (default follower):
 ```sh
-node bin/code-share.js connect cs1:<string> --leader    # leader=true for all shared projects
-node bin/code-share.js connect cs1:<string> --follower  # leader=false for all shared projects
+node bin/code-share.js share <path> --leader     # leader=true for this project
+node bin/code-share.js share <path> --follower   # leader=false (the default)
 ```
 
 | My `leader` | Peer `leader` | Derived mode | Sync behavior |
@@ -112,11 +120,11 @@ git -C <repo> add <files> && git -C <repo> commit --no-edit
 | Command | Description |
 |---------|-------------|
 | `serve [opts]` | Start git server + tunnel + web UI |
-| `share <path> [--as name]` | Add a repo to the shared scope |
+| `share <path> [--as name] [--leader\|--follower]` | Add a repo to the shared scope (sets per-project leader flag; default follower) |
 | `unshare <name>` | Remove a repo from scope |
 | `list` | Show shared repos + URLs |
-| `clone <url> [--token t] [--dir d]` | Clone a peer project |
-| `connect <cs1:string\|url> [--name n] [--leader\|--follower]` | Handshake both directions |
+| `clone <peer> <project> [--dir d]` | Clone a project from a connected peer (run `connect` first) |
+| `connect <cs1:string\|url> [--name n]` | Handshake both directions |
 | `sync [project] [--remote r] [--branch b] [--rebase]` | Pull-only sync |
 | `status` | Show token, URLs, `cs1:` connection string, shared repos, peers |
 
