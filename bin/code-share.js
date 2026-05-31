@@ -9,7 +9,7 @@ const { getLanIP, startMdns } = require('../src/lan');
 const { startTunnel } = require('../src/tunnel');
 const { startServer } = require('../src/server');
 const { startWebUI } = require('../src/webui');
-const { cloneRepo, connectPeer, authedUrl } = require('../src/peer');
+const { cloneRepo, connectPeer, authedUrl, buildConnectionString } = require('../src/peer');
 const { sync } = require('../src/sync');
 
 const program = new Command();
@@ -256,6 +256,8 @@ program
     console.log(`Tunnel:     ${cfg.tunnel}`);
     console.log(`LAN URL:    ${cfg.selfUrl || '(not serving)'}`);
     console.log(`Tunnel URL: ${cfg.tunnelUrl || '(none)'}`);
+    const cs = buildConnectionString(cfg.tunnelUrl || cfg.selfUrl, cfg.token);
+    console.log(`Connection: ${cs || '(start tunnel or serve on LAN first)'}`);
     console.log(`Projects root: ${PROJECTS_ROOT}`);
     console.log(`\nShared repos (${shared.length}):`);
     if (shared.length === 0) {

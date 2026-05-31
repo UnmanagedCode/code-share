@@ -12,6 +12,24 @@ function authedUrl(base, token) {
   return u.toString();
 }
 
+// Build a cs1: connection string from a base URL + token (mirrors the web UI's
+// makeConnectionString in static/ui.html). Strips any embedded credentials and
+// base64url-encodes a {url, token} payload. Returns null if url is missing/invalid.
+function buildConnectionString(base, token) {
+  if (!base) return null;
+  try {
+    const u = new URL(base);
+    u.username = '';
+    u.password = '';
+    const bare = u.toString().replace(/\/$/, '');
+    const json = JSON.stringify({ url: bare, token });
+    return 'cs1:' + Buffer.from(json, 'utf8').toString('base64')
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  } catch {
+    return null;
+  }
+}
+
 function cloneRepo(url, token, dir) {
   const cloneUrl = token ? authedUrl(url, token) : url;
   const target = dir || '.';
@@ -156,4 +174,4 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   return peerResp;
 }
 
-module.exports = { cloneRepo, connectPeer, addRemote, authedUrl };
+module.exports = { cloneRepo, connectPeer, addRemote, authedUrl, buildConnectionString };

@@ -98,7 +98,7 @@ The peer's current leader flag is fetched live from their `/control/status` at s
 | `clone <url> [--token t] [--dir d]` | Clone a peer project |
 | `connect <cs1:string\|url> [--name n] [--leader\|--follower]` | Handshake both directions |
 | `sync [project] [--remote r] [--branch b] [--rebase]` | Pull-only sync |
-| `status` | Show token, URLs, shared repos, peers |
+| `status` | Show token, URLs, `cs1:` connection string, shared repos, peers |
 
 ### `connect` input formats
 
@@ -145,6 +145,8 @@ cs1:<base64url({"url":"https://host.trycloudflare.com","token":"<hex>"})>
 - The embedded URL is credential-free (no `x:token@` prefix).
 - The token is the peer's server token for authentication.
 - Version prefix `cs1:` identifies the format for forward compatibility.
+
+Both the web UI ("Your Link") and the CLI `status` command print the assembled string. Each prefers the tunnel URL over the LAN URL and strips embedded credentials before encoding.
 
 ## Architecture
 
