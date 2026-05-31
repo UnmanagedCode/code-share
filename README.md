@@ -87,6 +87,26 @@ node bin/code-share.js connect cs1:<string> --follower  # leader=false for all s
 
 The peer's current leader flag is fetched live from their `/control/status` at sync time, with a fallback to the value stored at connect time if the peer is unreachable.
 
+### Conflict handling
+
+On any conflict, `sync` aborts the in-progress git operation automatically, leaving the working tree clean and the branch tip unchanged. Exit code is `1`. No manual cleanup needed.
+
+| Sync mode | Abort | Output |
+|-----------|-------|--------|
+| Symmetric or leader ingest | `git merge --abort` | `Sync failed: Merge conflict. Aborted cleanly. Conflicting files:` + file list |
+| Follower (rebase fallback) | `git rebase --abort` | `Sync failed: Rebase conflict on follower sync. Aborted cleanly. Conflicting files:` + file list |
+| `--rebase` flag | `git rebase --abort` | `Sync failed: Rebase conflict. Aborted cleanly. Conflicting files:` + file list |
+
+The follower path logs `Follower fast-forward sync...` then, if fast-forward fails, `Cannot fast-forward; rebasing local commits on top of leader tip...` before rebasing.
+
+**To reconcile manually after a conflict:**
+```sh
+git -C <repo> fetch peer
+git -C <repo> merge --no-ff peer/<branch>   # or: git rebase peer/<branch>
+# resolve conflicts in editor, then:
+git -C <repo> add <files> && git -C <repo> commit --no-edit
+```
+
 ## CLI reference
 
 | Command | Description |
