@@ -95,6 +95,27 @@ node bin/code-share.js share <path> --follower   # leader=false (the default)
 
 The peer's current leader flag is fetched live from their `/control/status` at sync time, with a fallback to the value stored at connect time if the peer is unreachable.
 
+### Peer remotes
+
+code-share wires a standard git remote into each shared project's `.git/config` so that `sync` and manual git commands can reach a peer without reconstructing a URL.
+
+**Remote name:** the peer's local name — `peer` by default, set with `connect --name <n>`.  
+**Remote URL:** token embedded in Basic-auth form: `http://x:<token>@host:port/<project>.git`.
+
+The remote is added (or updated, idempotently) at three moments:
+
+1. **`connect`** — wired onto every project you are currently sharing.
+2. **`share` while peers are connected** — wired for every already-connected peer onto the newly-shared project.
+3. **Inbound peer connection** (`POST /control/register`) — wired for the connecting peer onto your currently-shared projects.
+
+`sync` defaults to `remote = 'peer'`, so `sync <project>` is equivalent to `git fetch peer` followed by the applicable merge or rebase.
+
+To inspect or use the remote URL for manual git actions:
+```sh
+git -C <repo> remote get-url peer   # authed URL for this project
+git -C <repo> remote -v             # all wired peer remotes
+```
+
 ### Conflict handling
 
 On any conflict, `sync` aborts the in-progress git operation automatically, leaving the working tree clean and the branch tip unchanged. Exit code is `1`. No manual cleanup needed.
@@ -107,10 +128,11 @@ On any conflict, `sync` aborts the in-progress git operation automatically, leav
 
 The follower path logs `Follower fast-forward sync...` then, if fast-forward fails, `Cannot fast-forward; rebasing local commits on top of leader tip...` before rebasing.
 
-**To reconcile manually after a conflict:**
+**To reconcile manually after a conflict** (`peer` is the remote name wired by code-share; see [Peer remotes](#peer-remotes)):
 ```sh
+git -C <repo> remote get-url peer          # print the authed URL if needed
 git -C <repo> fetch peer
-git -C <repo> merge --no-ff peer/<branch>   # or: git rebase peer/<branch>
+git -C <repo> merge --no-ff peer/<branch>  # or: git rebase peer/<branch>
 # resolve conflicts in editor, then:
 git -C <repo> add <files> && git -C <repo> commit --no-edit
 ```
@@ -201,7 +223,7 @@ State lives in `data/` inside the code-share project directory (gitignored):
 - `data/registry.json` — shared projects: `{ name, path, leader, peers[] }` — `leader` is a boolean per project; `peers[].leader` stores the last-known leader flag for each peer
 - `data/serve/<name>.git` → symlink to actual repo (node-git-server root)
 
-Target repos are never modified by code-share (peer git remotes in their `.git/config` are standard git, not code-share files).
+code-share never touches the working tree or commit history of shared repos. It does add a `peer` git remote to each repo's `.git/config` (standard git remote config, not code-share-managed state — removable with `git remote remove peer`).
 
 ## Environment variables
 
