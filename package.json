@@ -1,0 +1,18 @@
+{
+  "name": "code-share",
+  "version": "1.0.0",
+  "description": "Peer-to-peer read-only Git repo sharing over LAN or internet",
+  "bin": {
+    "code-share": "./bin/code-share.js"
+  },
+  "dependencies": {
+    "bonjour-service": "^1.4.0",
+    "commander": "^15.0.0",
+    "localtunnel": "^2.0.2",
+    "node-git-server": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
