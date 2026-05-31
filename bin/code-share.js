@@ -9,7 +9,7 @@ const { getLanIP, startMdns } = require('../src/lan');
 const { startTunnel } = require('../src/tunnel');
 const { startServer } = require('../src/server');
 const { startWebUI } = require('../src/webui');
-const { cloneRepo, connectPeer, authedUrl, buildConnectionString } = require('../src/peer');
+const { cloneRepo, connectPeer, authedUrl, addRemote, buildConnectionString } = require('../src/peer');
 const { sync } = require('../src/sync');
 
 const program = new Command();
@@ -96,15 +96,28 @@ program
   .command('share <repoPath>')
   .description('Add a repo to the shared scope')
   .option('--as <name>', 'name to serve the repo under (default: directory basename)')
+  .option('--leader', 'mark this side as leader for this project (leader=true)')
+  .option('--follower', 'mark this side as non-leader for this project (leader=false, the default)')
   .action((repoPath, opts) => {
     const absPath = path.resolve(repoPath);
     const name = opts.as || path.basename(absPath);
+    const leader = !!opts.leader; // default follower; --follower is explicit/no-op
     try {
-      const entry = registry.addProject(absPath, name);
-      console.log(`Shared: ${entry.name} → ${entry.path}`);
+      const entry = registry.addProject(absPath, name, leader);
+      console.log(`Shared: ${entry.name} → ${entry.path}  [${entry.leader ? 'leader' : 'follower'}]`);
       const cfg = loadConfig();
       const base = cfg.tunnelUrl || cfg.selfUrl || `http://x:${cfg.token}@<host>:${cfg.port}`;
       console.log(`URL: ${base}/${entry.name}.git`);
+
+      // Wire the peer git remote for every already-connected peer, mirroring the
+      // handleRegister principle: wire wherever a (project, peer) pair becomes known.
+      // Idempotent (addRemote does add → set-url). sync fetches the live leader flag.
+      for (const pr of (cfg.peers || [])) {
+        const projUrl = pr.url.replace(/\/?$/, '') + '/' + name + '.git';
+        addRemote(entry.path, pr.name, authedUrl(projUrl, pr.token));
+        registry.addPeerToProject(name, { name: pr.name, url: pr.url, token: pr.token, leader: false });
+        console.log(`  Wired peer remote: ${pr.name} → ${projUrl}`);
+      }
     } catch (e) {
       console.error('Error:', e.message);
       process.exit(1);
@@ -152,13 +165,19 @@ program
 
 // ─── clone ────────────────────────────────────────────────────────────────────
 program
-  .command('clone <url>')
-  .description('Clone a peer project from zero')
-  .option('--token <t>', 'auth token')
-  .option('--dir <path>', 'destination directory')
-  .action((url, opts) => {
+  .command('clone <peer> <project>')
+  .description('Clone a project from a connected peer (run `connect` first)')
+  .option('--dir <path>', 'destination directory (default: ./<project>)')
+  .action((peerName, project, opts) => {
+    const cfg = loadConfig();
+    const peer = (cfg.peers || []).find(p => p.name === peerName);
+    if (!peer) {
+      console.error(`Not connected to peer '${peerName}'. Run \`connect <cs1:...>\` first.`);
+      process.exit(1);
+    }
     try {
-      cloneRepo(url, opts.token, opts.dir);
+      const projUrl = peer.url.replace(/\/?$/, '') + '/' + project + '.git';
+      cloneRepo(projUrl, peer.token, opts.dir || project);
     } catch (e) {
       console.error('Clone failed:', e.message);
       process.exit(1);
@@ -171,8 +190,6 @@ program
   .description('Wire peer in both directions via handshake. Accepts a cs1: connection string or a plain URL.')
   .option('--token <t>', 'peer auth token (not needed when using a cs1: connection string)')
   .option('--name <n>', 'local name for this peer', 'peer')
-  .option('--leader', 'mark this side as leader for all shared projects (leader=true)')
-  .option('--follower', 'mark this side as non-leader for all shared projects (leader=false)')
   .action(async (url, opts) => {
     let peerBaseUrl = url;
     let peerToken = opts.token || null;
@@ -202,16 +219,6 @@ program
       console.log(`Connected to peer "${opts.name}".`);
       if (result && result.shared && result.shared.length > 0) {
         console.log(`Peer shares: ${result.shared.join(', ')}`);
-      }
-
-      // Apply per-project leader flag if --leader or --follower was given
-      if (opts.leader || opts.follower) {
-        const leader = !!opts.leader;
-        const shared = loadRegistry();
-        for (const proj of shared) {
-          registry.updateProject(proj.name, { leader });
-        }
-        console.log(`Leader set to ${leader} for all ${shared.length} shared project(s).`);
       }
 
       console.log('Both directions wired — each side can now sync independently.');

@@ -20,7 +20,7 @@ function listShared() {
   return loadRegistry();
 }
 
-function addProject(absPath, name) {
+function addProject(absPath, name, leader = false) {
   absPath = path.resolve(absPath);
   if (!fs.existsSync(absPath)) throw new Error(`Path does not exist: ${absPath}`);
   if (!isGitRepo(absPath)) throw new Error(`Not a git repository: ${absPath}`);
@@ -34,7 +34,7 @@ function addProject(absPath, name) {
   try { fs.unlinkSync(symlinkPath); } catch {}
   fs.symlinkSync(absPath, symlinkPath);
 
-  const entry = { name, path: absPath, leader: false, peers: [] };
+  const entry = { name, path: absPath, leader: !!leader, peers: [] };
   reg.push(entry);
   saveRegistry(reg);
   return entry;
