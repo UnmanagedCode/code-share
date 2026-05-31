@@ -3,6 +3,7 @@ const http = require('http');
 const { Git } = require('node-git-server');
 const { SERVE_DIR, loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
+const { addRemote, authedUrl } = require('./peer');
 
 function parseBasicAuth(req) {
   const header = req.headers['authorization'];
@@ -57,6 +58,7 @@ async function handleRegister(req, res) {
     const existing = proj.peers.findIndex(p => p.name === peerName);
     if (existing >= 0) proj.peers[existing] = peerEntry;
     else proj.peers.push(peerEntry);
+    addRemote(proj.path, peerName, authedUrl(peerUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken));
   }
   saveRegistry(reg);
 
