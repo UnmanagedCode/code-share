@@ -13,7 +13,7 @@ Peer-to-peer read-only Git repo sharing over LAN or the internet. Each party ser
 ## Prerequisites
 
 - **Node.js** (v18+)
-- **cloudflared** — required for internet tunnels (`--tunnel cloudflared`, the default). Install via Termux: `pkg install cloudflared`. Not needed when using `--tunnel none` or `--tunnel localtunnel`.
+- **cloudflared** — required for internet tunnels (`--tunnel cloudflared`, the default). Download from [developers.cloudflare.com](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). Not needed when using `--tunnel none` or `--tunnel localtunnel`.
 
 ## Quick starts
 
@@ -127,4 +127,4 @@ Target repos are never modified by code-share (peer git remotes in their `.git/c
 - The tunnel carries only the git read-only endpoint. The web UI is localhost-only.
 - Push is blocked at two independent layers (HTTP server + git server event hook).
 - Token auth is enforced before any request is routed, including control endpoints.
-- cloudflared must be installed separately (`pkg install cloudflared` on Termux). The app does not download it.
+- cloudflared must be installed separately (see Prerequisites). The app does not download it.

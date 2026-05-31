@@ -7,7 +7,7 @@ function ensureCloudflared() {
   } catch {
     throw new Error(
       'cloudflared not found in PATH.\n' +
-      'Install it first:  pkg install cloudflared\n' +
+      'Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/\n' +
       'Then re-run this command.'
     );
   }
