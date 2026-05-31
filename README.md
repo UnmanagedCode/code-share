@@ -10,6 +10,11 @@ Peer-to-peer read-only Git repo sharing over LAN or the internet. Each party ser
 - **Multi-project**: one running instance serves all shared repos at their own `/<name>.git` URLs.
 - **Single token**: one instance-level token gates access to all served repos (per-repo tokens are a future enhancement).
 
+## Prerequisites
+
+- **Node.js** (v18+)
+- **cloudflared** — required for internet tunnels (`--tunnel cloudflared`, the default). Install via Termux: `pkg install cloudflared`. Not needed when using `--tunnel none` or `--tunnel localtunnel`.
+
 ## Quick starts
 
 ### LAN two-party flow
@@ -122,4 +127,4 @@ Target repos are never modified by code-share (peer git remotes in their `.git/c
 - The tunnel carries only the git read-only endpoint. The web UI is localhost-only.
 - Push is blocked at two independent layers (HTTP server + git server event hook).
 - Token auth is enforced before any request is routed, including control endpoints.
-- `data/cloudflared` is auto-downloaded for ARM64 (Termux/Android) if `cloudflared` is not in PATH.
+- cloudflared must be installed separately (`pkg install cloudflared` on Termux). The app does not download it.
