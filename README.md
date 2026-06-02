@@ -53,15 +53,27 @@ node bin/code-share.js sync my-project
 
 ### Internet / tunnel flow
 
+For two-way internet sync, **both** parties must run their own tunnel so each side
+has a publicly reachable URL to advertise during the handshake.
+
+**Party A** (shares first):
 ```sh
 node bin/code-share.js serve --tunnel cloudflared
 node bin/code-share.js share ../my-project
-# Copy the cs1: Connection string — shown in the web UI (http://127.0.0.1:9420)
-# or by `node bin/code-share.js status`. Share it with the other party. They run:
-node bin/code-share.js connect cs1:<string>
-node bin/code-share.js clone peer my-project
+# Copy the cs1: Connection string (web UI or `status`) and send it to Party B.
 ```
 
+**Party B** (connects):
+```sh
+node bin/code-share.js serve --tunnel cloudflared
+node bin/code-share.js connect cs1:<string-from-A>
+node bin/code-share.js clone peer my-project
+node bin/code-share.js share ./my-project
+```
+
+From that single `connect`, both directions are wired automatically: the client
+passes its own tunnel URL to the server during the handshake, so the server stores
+a routable address for the client too. Both sides can then `sync` over the internet.
 No separate token field needed. The `cs1:` string carries everything.
 
 ### Multi-project sharing

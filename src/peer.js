@@ -111,7 +111,7 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   const { name = 'peer' } = opts;
   const cfg = loadConfig();
   const selfToken = cfg.token;
-  const selfUrl = cfg.selfUrl || cfg.tunnelUrl;
+  const selfUrl = cfg.tunnelUrl || cfg.selfUrl;
 
   if (!selfUrl) {
     throw new Error('No selfUrl set — run `serve` first so your URL is known before connecting');
