@@ -4,6 +4,7 @@ const http = require('http');
 const https = require('https');
 const { loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
+const { isServing, isInternetUrl } = require('./serve-state');
 
 function authedUrl(base, token) {
   const u = new URL(base);
@@ -110,6 +111,21 @@ function postJSON(url, body, token) {
 async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   const { name = 'peer' } = opts;
   const cfg = loadConfig();
+
+  if (!(await isServing(cfg.port))) {
+    throw new Error(
+      'serve is not running — start it first with `serve` ' +
+      '(use `--tunnel cloudflared` to be reachable over the internet)'
+    );
+  }
+
+  if (isInternetUrl(peerBaseUrl) && !cfg.tunnelUrl) {
+    throw new Error(
+      'This peer is reachable over the internet, but your serve has no tunnel. ' +
+      'Restart with `serve --tunnel cloudflared` so you have a reachable URL to advertise back.'
+    );
+  }
+
   const selfToken = cfg.token;
   const selfUrl = cfg.tunnelUrl || cfg.selfUrl;
 

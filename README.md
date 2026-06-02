@@ -53,6 +53,10 @@ node bin/code-share.js sync my-project
 
 ### Internet / tunnel flow
 
+> **Prerequisites:** `serve` must be running on **both** sides before `connect` or `share`.
+> When connecting to an internet (cloudflared) peer, your own `serve` must also have
+> a live tunnel (`--tunnel cloudflared`) so the peer can store a routable URL for you.
+
 For two-way internet sync, **both** parties must run their own tunnel so each side
 has a publicly reachable URL to advertise during the handshake.
 
