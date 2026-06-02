@@ -128,11 +128,20 @@ On any conflict, `sync` aborts the in-progress git operation automatically, leav
 
 The follower path logs `Follower fast-forward sync...` then, if fast-forward fails, `Cannot fast-forward; rebasing local commits on top of leader tip...` before rebasing.
 
+**Followers must rebase, never merge.** When you are the follower for a project (your `leader` flag is false and the peer's is true) and a sync conflicts, you are required to resolve it by **rebasing your local commits onto the leader's tip** — do *not* fall back to a merge. Only the leader (or symmetric peers) may create merge commits; the follower keeps a linear history rooted on the leader's branch. This is exactly what automated `sync` enforces (it rebases on the follower path and only ever runs `merge --no-ff` for symmetric/leader-ingest modes), and it must hold for manual reconciliation too.
+
 **To reconcile manually after a conflict** (`peer` is the remote name wired by code-share; see [Peer remotes](#peer-remotes)):
 ```sh
 git -C <repo> remote get-url peer          # print the authed URL if needed
 git -C <repo> fetch peer
-git -C <repo> merge --no-ff peer/<branch>  # or: git rebase peer/<branch>
+
+# Follower (your leader=false, peer leader=true): REBASE only — never merge.
+git -C <repo> rebase peer/<branch>
+# resolve conflicts in editor, then:
+git -C <repo> add <files> && git -C <repo> rebase --continue
+
+# Leader / symmetric only: a merge commit is allowed.
+git -C <repo> merge --no-ff peer/<branch>
 # resolve conflicts in editor, then:
 git -C <repo> add <files> && git -C <repo> commit --no-edit
 ```
