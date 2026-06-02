@@ -64,6 +64,7 @@ program
     if (opts.mdns) startMdns(port, 'code-share');
 
     // Tunnel
+    cfg.tunnelUrl = null;
     let tunnelStop = () => {};
     if (tunnel !== 'none') {
       console.log(`Starting ${tunnel} tunnel...`);

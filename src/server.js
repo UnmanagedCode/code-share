@@ -76,7 +76,7 @@ async function handleRegister(req, res) {
   const sharedProjects = loadRegistry().map(p => p.name);
   sendJSON(res, 200, {
     ok: true,
-    url: cfg2.selfUrl || cfg2.tunnelUrl,
+    url: cfg2.tunnelUrl || cfg2.selfUrl,
     token: cfg2.token,
     shared: sharedProjects
   });
