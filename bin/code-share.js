@@ -11,6 +11,7 @@ const { startServer } = require('../src/server');
 const { startWebUI } = require('../src/webui');
 const { cloneRepo, connectPeer, authedUrl, addRemote, buildConnectionString } = require('../src/peer');
 const { sync } = require('../src/sync');
+const { isServing } = require('../src/serve-state');
 
 const program = new Command();
 
@@ -99,15 +100,22 @@ program
   .option('--as <name>', 'name to serve the repo under (default: directory basename)')
   .option('--leader', 'mark this side as leader for this project (leader=true)')
   .option('--follower', 'mark this side as non-leader for this project (leader=false, the default)')
-  .action((repoPath, opts) => {
+  .action(async (repoPath, opts) => {
     const absPath = path.resolve(repoPath);
     const name = opts.as || path.basename(absPath);
     const leader = !!opts.leader; // default follower; --follower is explicit/no-op
+    const cfg = loadConfig();
     try {
+      if (!(await isServing(cfg.port))) {
+        throw new Error(
+          'serve is not running — start it first with `serve` ' +
+          '(use `--tunnel cloudflared` to be reachable over the internet)'
+        );
+      }
       const entry = registry.addProject(absPath, name, leader);
       console.log(`Shared: ${entry.name} → ${entry.path}  [${entry.leader ? 'leader' : 'follower'}]`);
-      const cfg = loadConfig();
       const base = cfg.tunnelUrl || cfg.selfUrl || `http://x:${cfg.token}@<host>:${cfg.port}`;
+
       console.log(`URL: ${base}/${entry.name}.git`);
 
       // Wire the peer git remote for every already-connected peer, mirroring the
