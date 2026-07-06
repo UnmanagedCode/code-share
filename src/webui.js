@@ -7,6 +7,7 @@ const { loadConfig, saveConfig, loadRegistry, PROJECTS_ROOT } = require('./confi
 const registry = require('./registry');
 const peer = require('./peer');
 const { getSyncState } = require('./sync');
+const tunnelManager = require('./tunnel-manager');
 
 const UI_HTML = path.join(__dirname, '../static/ui.html');
 
@@ -60,6 +61,7 @@ async function handleAPI(req, res) {
   if (req.method === 'GET' && pathname === '/api/status') {
     const cfg = loadConfig();
     const reg = loadRegistry();
+    const ts = tunnelManager.getTunnelStatus();
     sendJSON(res, 200, {
       token: cfg.token,
       selfUrl: cfg.selfUrl,
@@ -67,10 +69,34 @@ async function handleAPI(req, res) {
       port: cfg.port,
       uiPort: cfg.uiPort,
       tunnel: cfg.tunnel,
+      tunnelStarting: ts.starting,
       projectsRoot: PROJECTS_ROOT,
       shared: reg,
       peers: cfg.peers || []
     });
+    return true;
+  }
+
+  // Start a tunnel while serve is already running (default: cloudflared)
+  if (req.method === 'POST' && pathname === '/api/tunnel/start') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch {
+      sendJSON(res, 400, { error: 'Invalid JSON' });
+      return true;
+    }
+    try {
+      const status = await tunnelManager.startRuntimeTunnel(body.type || 'cloudflared');
+      sendJSON(res, 200, { ok: true, ...status });
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+    }
+    return true;
+  }
+
+  // Stop the currently active runtime/startup tunnel, back to LAN-only
+  if (req.method === 'POST' && pathname === '/api/tunnel/stop') {
+    const status = tunnelManager.stopRuntimeTunnel();
+    sendJSON(res, 200, { ok: true, ...status });
     return true;
   }
 

@@ -57,8 +57,9 @@
 <div class="card" id="status-card">
   <div class="row"><span class="label">Status</span><span class="val" id="s-status">Loading…</span></div>
   <div class="row"><span class="label">LAN URL</span><span class="val" id="s-lan">—</span><button class="copy-btn" onclick="copy('s-lan')">Copy</button></div>
-  <div class="row"><span class="label">Tunnel URL</span><span class="val" id="s-tunnel">—</span><button class="copy-btn" onclick="copy('s-tunnel')">Copy</button></div>
+  <div class="row"><span class="label">Tunnel URL</span><span class="val" id="s-tunnel">—</span><button class="copy-btn" onclick="copy('s-tunnel')">Copy</button><button id="tunnel-btn" onclick="tunnelBtnClick()">Start tunnel</button></div>
   <div class="row"><span class="label">Connection</span><span class="val" id="s-cs">—</span><button class="copy-btn" onclick="copy('s-cs')">Copy</button></div>
+  <div id="tunnel-msg" style="font-size:0.85rem;margin-top:0.25rem"></div>
 </div>
 
 <h2>Projects under PROJECTS_ROOT</h2>
@@ -85,6 +86,7 @@
 <script>
 let status = null;
 let sharedRegistry = [];
+let tunnelBusy = false;
 
 // ── Connection string helpers ────────────────────────────────────────────────
 
@@ -145,6 +147,28 @@ function renderStatus(s) {
   } else {
     csEl.textContent = '— (start tunnel or connect LAN first)';
     csEl.style.color = '#8b949e';
+  }
+
+  renderTunnelButton(s);
+}
+
+function renderTunnelButton(s) {
+  const btn = document.getElementById('tunnel-btn');
+  if (!btn) return;
+  const busy = tunnelBusy || s.tunnelStarting;
+  if (busy) {
+    btn.disabled = true;
+    btn.className = 'secondary';
+    btn.textContent = 'Starting… (up to 30s)';
+    return;
+  }
+  btn.disabled = false;
+  if (s.tunnelUrl) {
+    btn.className = 'danger';
+    btn.textContent = 'Stop tunnel';
+  } else {
+    btn.className = '';
+    btn.textContent = 'Start tunnel';
   }
 }
 
@@ -296,6 +320,49 @@ async function unshare(name) {
   const data = await resp.json();
   if (data.error) alert('Error: ' + data.error);
   else load();
+}
+
+function tunnelBtnClick() {
+  if (status && status.tunnelUrl) stopTunnel();
+  else startTunnelFromUI();
+}
+
+async function startTunnelFromUI() {
+  const msg = document.getElementById('tunnel-msg');
+  if (msg) msg.innerHTML = '';
+  tunnelBusy = true;
+  if (status) renderTunnelButton(status);
+  try {
+    const resp = await fetch('/api/tunnel/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'cloudflared' })
+    });
+    const data = await resp.json();
+    if (data.error && msg) msg.innerHTML = `<span class="error">${esc(data.error)}</span>`;
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  } finally {
+    tunnelBusy = false;
+    load();
+  }
+}
+
+async function stopTunnel() {
+  const msg = document.getElementById('tunnel-msg');
+  if (msg) msg.innerHTML = '';
+  tunnelBusy = true;
+  if (status) renderTunnelButton(status);
+  try {
+    const resp = await fetch('/api/tunnel/stop', { method: 'POST' });
+    const data = await resp.json();
+    if (data.error && msg) msg.innerHTML = `<span class="error">${esc(data.error)}</span>`;
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+  } finally {
+    tunnelBusy = false;
+    load();
+  }
 }
 
 async function setProjectLeader(name, leader) {

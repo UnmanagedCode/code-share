@@ -192,13 +192,15 @@ git -C <repo> add <files> && git -C <repo> commit --no-edit
 | `--mdns` | off | Advertise via Bonjour/mDNS |
 | `--token` | auto-generated | Override the instance token |
 
+A tunnel can also be started or stopped later, without restarting `serve`, via the **Start tunnel** / **Stop tunnel** button in the web UI's "Your Link" section (see below).
+
 ## Web UI
 
 Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 
 | Section | What it shows |
 |---------|--------------|
-| **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers) |
+| **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers). A **Start tunnel** / **Stop tunnel** button brings up (or tears down) a cloudflared tunnel while `serve` keeps running — no restart needed. Starting can take up to ~30s (the button shows a busy state); the Tunnel URL and `cs1:` string update live once it's up. |
 | **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project Leader checkbox |
 | **Connect a Peer** | Paste a peer's `cs1:` connection string + give the peer a local name |
 | **Connected Peers** | Per peer: a **Sync button + ahead/behind badge** for every project both sides share (live peer catalog ∩ local registry, independent of registry peer-wiring state), and a **Clone button** for projects the peer exposes that you don't have locally |
@@ -240,6 +242,8 @@ Web UI               127.0.0.1:<uiPort> ← never tunneled, localhost only
   └─ /api/peer-status?peer=<name>       ← proxy to peer's /control/status
   └─ /api/sync-status?project=<name>    ← git fetch + ahead/behind count (self-wires the peer remote)
   └─ /api/clone                         ← clone a peer's project into PROJECTS_ROOT, register + wire peer remote
+  └─ /api/tunnel/start                  ← start a tunnel while serve is running (body: {type?}, default cloudflared)
+  └─ /api/tunnel/stop                   ← stop the active tunnel, back to LAN-only
 
 Tunnel               (cloudflared/localtunnel) → wraps only the git server port
 ```

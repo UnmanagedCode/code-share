@@ -12,6 +12,7 @@ const { startWebUI } = require('../src/webui');
 const { cloneRepo, connectPeer, authedUrl, addRemote, buildConnectionString, wireConnectedPeers } = require('../src/peer');
 const { sync } = require('../src/sync');
 const { isServing } = require('../src/serve-state');
+const tunnelManager = require('../src/tunnel-manager');
 
 const program = new Command();
 
@@ -49,6 +50,7 @@ program
     // Start git server
     await startServer(port, token);
     console.log(`Git server listening on 0.0.0.0:${port}`);
+    tunnelManager.init(port, token);
 
     // LAN info
     const lanIP = getLanIP();
@@ -66,15 +68,13 @@ program
 
     // Tunnel
     cfg.tunnelUrl = null;
-    let tunnelStop = () => {};
     if (tunnel !== 'none') {
       console.log(`Starting ${tunnel} tunnel...`);
       try {
         const t = await startTunnel(tunnel, port);
         if (t.url) {
-          const tunnelBase = `${t.url.replace(/\/$/, '')}`;
-          cfg.tunnelUrl = `${tunnelBase}`.replace('://', `://x:${token}@`);
-          tunnelStop = t.stop;
+          cfg.tunnelUrl = tunnelManager.toAuthedUrl(t.url, token);
+          tunnelManager.setActive(tunnel, t.stop, cfg.tunnelUrl);
           console.log(`Tunnel URL: ${cfg.tunnelUrl}`);
         }
       } catch (e) {
@@ -89,8 +89,8 @@ program
     console.log(`Web UI: http://127.0.0.1:${uiPort}`);
     console.log('\nPress Ctrl+C to stop.');
 
-    process.on('SIGINT', () => { tunnelStop(); process.exit(0); });
-    process.on('SIGTERM', () => { tunnelStop(); process.exit(0); });
+    process.on('SIGINT', () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); });
+    process.on('SIGTERM', () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); });
   });
 
 // ─── share ────────────────────────────────────────────────────────────────────
