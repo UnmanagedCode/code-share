@@ -9,7 +9,7 @@ const { getLanIP, startMdns } = require('../src/lan');
 const { startTunnel } = require('../src/tunnel');
 const { startServer } = require('../src/server');
 const { startWebUI } = require('../src/webui');
-const { cloneRepo, connectPeer, authedUrl, addRemote, buildConnectionString } = require('../src/peer');
+const { cloneRepo, connectPeer, authedUrl, addRemote, buildConnectionString, wireConnectedPeers } = require('../src/peer');
 const { sync } = require('../src/sync');
 const { isServing } = require('../src/serve-state');
 
@@ -121,11 +121,8 @@ program
       // Wire the peer git remote for every already-connected peer, mirroring the
       // handleRegister principle: wire wherever a (project, peer) pair becomes known.
       // Idempotent (addRemote does add → set-url). sync fetches the live leader flag.
-      for (const pr of (cfg.peers || [])) {
-        const projUrl = pr.url.replace(/\/?$/, '') + '/' + name + '.git';
-        addRemote(entry.path, pr.name, authedUrl(projUrl, pr.token));
-        registry.addPeerToProject(name, { name: pr.name, url: pr.url, token: pr.token, leader: false });
-        console.log(`  Wired peer remote: ${pr.name} → ${projUrl}`);
+      for (const w of wireConnectedPeers(name, entry.path)) {
+        console.log(`  Wired peer remote: ${w.name} → ${w.url}`);
       }
     } catch (e) {
       console.error('Error:', e.message);

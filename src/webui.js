@@ -89,9 +89,50 @@ async function handleAPI(req, res) {
     try {
       const name = body.name || path.basename(body.path || '');
       const entry = registry.addProject(body.path, name);
+      // Wire the peer git remote + registry peer entry for every connected peer,
+      // mirroring the CLI `share` — otherwise a UI-shared project gets peers:[]
+      // and never renders a Sync button (and has no `peer` remote to sync against).
+      peer.wireConnectedPeers(name, entry.path);
       sendJSON(res, 200, { ok: true, entry });
     } catch (e) {
       sendJSON(res, 400, { error: e.message });
+    }
+    return true;
+  }
+
+  // Clone a project from a connected peer into PROJECTS_ROOT, register it, and
+  // wire the peer remote so it is immediately syncable (mirrors CLI clone + share,
+  // but lands in PROJECTS_ROOT and registers, which the bare CLI clone does not).
+  if (req.method === 'POST' && pathname === '/api/clone') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch {
+      sendJSON(res, 400, { error: 'Invalid JSON' });
+      return true;
+    }
+    const { peer: peerName, project } = body;
+    if (!peerName || !project) {
+      sendJSON(res, 400, { error: 'peer and project are required' });
+      return true;
+    }
+    const cfg = loadConfig();
+    const peerInfo = (cfg.peers || []).find(p => p.name === peerName);
+    if (!peerInfo) { sendJSON(res, 404, { error: `Peer not found: ${peerName}` }); return true; }
+    const dest = path.join(PROJECTS_ROOT, project);
+    if (fs.existsSync(dest)) { sendJSON(res, 400, { error: `Destination already exists: ${dest}` }); return true; }
+    if (registry.findProject(project)) { sendJSON(res, 400, { error: `Name already in use: ${project}` }); return true; }
+    try {
+      const projUrl = peerInfo.url.replace(/\/?$/, '') + '/' + project + '.git';
+      peer.cloneRepo(projUrl, peerInfo.token, dest);
+    } catch (e) {
+      sendJSON(res, 500, { error: `Clone failed: ${e.message}` });
+      return true;
+    }
+    try {
+      const entry = registry.addProject(dest, project);
+      peer.wireConnectedPeers(project, entry.path);
+      sendJSON(res, 200, { ok: true, entry });
+    } catch (e) {
+      sendJSON(res, 500, { error: `Cloned to ${dest} but registration failed: ${e.message}` });
     }
     return true;
   }
@@ -169,6 +210,16 @@ async function handleAPI(req, res) {
     const remoteName  = url.searchParams.get('remote') || 'peer';
     if (!projectName) { sendJSON(res, 400, { error: 'project query param is required' }); return true; }
     try {
+      // Self-heal: if the project is local and we know this peer, make sure its
+      // git remote + registry peer entry exist before checking. The Connected
+      // Peers UI shows a Sync button for any project both sides share (live
+      // catalog ∩ local registry), which may include projects whose peer remote
+      // was never wired (e.g. shared before the wiring fix). Idempotent.
+      const proj = registry.findProject(projectName);
+      if (proj) {
+        const pr = (loadConfig().peers || []).find(p => p.name === remoteName);
+        if (pr) { try { peer.wirePeerRemote(projectName, proj.path, pr); } catch {} }
+      }
       const state = getSyncState(projectName, { remote: remoteName });
       sendJSON(res, 200, state);
     } catch (e) {

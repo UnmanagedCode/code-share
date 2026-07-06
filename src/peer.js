@@ -46,6 +46,25 @@ function addRemote(repoPath, name, url) {
   }
 }
 
+// Wire one peer's git remote + registry peer entry onto a project. Idempotent
+// (addRemote does add → set-url). `pr` is a peer config entry { name, url, token }.
+// Returns { name, url } (the project's URL on that peer) for caller-side logging.
+function wirePeerRemote(projectName, repoPath, pr) {
+  const projUrl = pr.url.replace(/\/?$/, '') + '/' + projectName + '.git';
+  addRemote(repoPath, pr.name, authedUrl(projUrl, pr.token));
+  registry.addPeerToProject(projectName, { name: pr.name, url: pr.url, token: pr.token, leader: false });
+  return { name: pr.name, url: projUrl };
+}
+
+// Wire every currently-connected peer onto a project. Shared by the CLI `share`
+// command and the web UI's /api/share and /api/clone so the peer association is
+// populated consistently no matter which path shares a project.
+// Returns the list of wired peers ([{ name, url }]) for caller-side logging.
+function wireConnectedPeers(projectName, repoPath) {
+  const cfg = loadConfig();
+  return (cfg.peers || []).map(pr => wirePeerRemote(projectName, repoPath, pr));
+}
+
 function getJSON(url, token) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -190,4 +209,4 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   return peerResp;
 }
 
-module.exports = { cloneRepo, connectPeer, addRemote, authedUrl, buildConnectionString };
+module.exports = { cloneRepo, connectPeer, addRemote, authedUrl, buildConnectionString, wirePeerRemote, wireConnectedPeers };
