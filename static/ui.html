@@ -211,44 +211,74 @@ function renderPeers(peers) {
   }
 }
 
+function syncRowHTML(peerName, name) {
+  return `<div class="peer-sync-row" id="psrow-${esc(peerName)}-${esc(name)}">
+      <span class="badge badge-green">${esc(name)}</span>
+      <span class="sync-indicator" id="psi-${esc(peerName)}-${esc(name)}"></span>
+      <button class="secondary" onclick="checkPeerProjectSync('${esc(name)}','${esc(peerName)}',this)">↕ Sync</button>
+    </div>`;
+}
+
+function cloneRowHTML(peerName, name) {
+  return `<div class="peer-sync-row" id="pcrow-${esc(peerName)}-${esc(name)}">
+      <span class="badge badge-gray">${esc(name)}</span>
+      <span style="color:#8b949e;font-size:0.75rem">peer only</span>
+      <span class="sync-indicator" id="pci-${esc(peerName)}-${esc(name)}"></span>
+      <button onclick="clonePeerProject('${esc(name)}','${esc(peerName)}',this)">⬇ Clone</button>
+    </div>`;
+}
+
 async function loadPeerProjects(peerName) {
   const el = document.getElementById('peer-proj-' + peerName);
   if (!el) return;
 
-  // Projects I share that have this peer registered as a remote
-  const mySyncable = sharedRegistry.filter(p => p.peers && p.peers.some(pe => pe.name === peerName));
+  const norm = s => String(s == null ? '' : s).trim();
+  const localByName = new Map(sharedRegistry.map(p => [norm(p.name), p]));
 
-  // Render syncable rows immediately — don't wait for peer status
-  el.innerHTML = mySyncable.length
-    ? mySyncable.map(p =>
-        `<div class="peer-sync-row" id="psrow-${esc(peerName)}-${esc(p.name)}">
-          <span class="badge badge-green">${esc(p.name)}</span>
-          <span class="sync-indicator" id="psi-${esc(peerName)}-${esc(p.name)}"></span>
-          <button class="secondary" onclick="checkPeerProjectSync('${esc(p.name)}','${esc(peerName)}',this)">↕ Sync</button>
-        </div>`
-      ).join('')
-    : '<span style="color:#8b949e;font-size:0.8rem">No shared projects synced with this peer yet.</span>';
+  // Offline fallback: projects the local registry already has wired to this peer.
+  // Used only when the peer's live catalog is unreachable.
+  const wired = sharedRegistry.filter(p => (p.peers || []).some(pe => pe.name === peerName));
 
-  // Fetch peer catalog asynchronously and append peer-only projects
+  // Show the wired list immediately so something renders before the catalog loads.
+  el.innerHTML = wired.length
+    ? wired.map(p => syncRowHTML(peerName, p.name)).join('')
+    : '<span style="color:#8b949e;font-size:0.8rem">Checking peer…</span>';
+
+  let data;
   try {
-    const data = await fetch(`/api/peer-status?peer=${encodeURIComponent(peerName)}`).then(r => r.json());
-    if (data.error) {
-      if (!mySyncable.length) {
-        el.innerHTML = `<span style="color:#f85149;font-size:0.8rem">Offline: ${esc(data.error)}</span>`;
-      }
-      return;
+    data = await fetch(`/api/peer-status?peer=${encodeURIComponent(peerName)}`).then(r => r.json());
+  } catch (e) {
+    data = { error: e.message };
+  }
+
+  if (data.error) {
+    // Peer unreachable — keep the wired fallback; if none, report offline.
+    if (!wired.length) {
+      el.innerHTML = `<span style="color:#f85149;font-size:0.8rem">Offline: ${esc(data.error)}</span>`;
     }
-    const syncableNames = new Set(mySyncable.map(p => p.name));
-    const peerOnly = (data.shared || []).filter(ps => !syncableNames.has(ps.name));
-    if (peerOnly.length) {
-      el.insertAdjacentHTML('beforeend', peerOnly.map(ps =>
-        `<div class="peer-sync-row">
-          <span class="badge badge-gray">${esc(ps.name)}</span>
-          <span style="color:#8b949e;font-size:0.75rem">peer only</span>
-        </div>`
-      ).join(''));
-    }
-  } catch {}
+    return;
+  }
+
+  // Peer reachable: the live catalog is the source of truth. A project is
+  // syncable iff it exists in BOTH the peer's catalog and my local registry
+  // (matched by name) — independent of whether registry peers[] was wired.
+  // Everything the peer exposes that I don't have locally gets a Clone button.
+  const catalog = data.shared || [];
+  const syncable = [];
+  const peerOnly = [];
+  for (const ps of catalog) {
+    const local = localByName.get(norm(ps.name));
+    if (local) syncable.push(local.name);
+    else peerOnly.push(ps.name);
+  }
+
+  const rows = [
+    ...syncable.map(n => syncRowHTML(peerName, n)),
+    ...peerOnly.map(n => cloneRowHTML(peerName, n))
+  ];
+  el.innerHTML = rows.length
+    ? rows.join('')
+    : '<span style="color:#8b949e;font-size:0.8rem">Peer exposes no projects.</span>';
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────────
@@ -301,6 +331,31 @@ async function checkPeerProjectSync(projectName, peerName, btn) {
     if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">err</span>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '↕ Sync'; }
+  }
+}
+
+// Clone a peer-only project into PROJECTS_ROOT, register it, and wire the peer
+// remote (backend /api/clone). On success the project becomes syncable and the
+// UI reloads so it moves to a Sync row.
+async function clonePeerProject(projectName, peerName, btn) {
+  const indicator = document.getElementById(`pci-${peerName}-${projectName}`);
+  if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> cloning…</span>';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const data = await fetch('/api/clone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peer: peerName, project: projectName })
+    }).then(r => r.json());
+    if (data.error) {
+      if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">clone failed</span>`;
+      if (btn) { btn.disabled = false; btn.textContent = '⬇ Clone'; }
+      return;
+    }
+    load(); // re-render: the project is now local + syncable
+  } catch (e) {
+    if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">clone failed</span>`;
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Clone'; }
   }
 }
 

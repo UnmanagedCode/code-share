@@ -201,7 +201,7 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 | **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers) |
 | **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project Leader checkbox |
 | **Connect a Peer** | Paste a peer's `cs1:` connection string + give the peer a local name |
-| **Connected Peers** | Each peer with syncable projects (Sync button + ahead/behind badge per project) and any additional projects the peer exposes |
+| **Connected Peers** | Per peer: a **Sync button + ahead/behind badge** for every project both sides share (live peer catalog ∩ local registry, independent of registry peer-wiring state), and a **Clone button** for projects the peer exposes that you don't have locally |
 
 **Sync state badge** (per syncable project under each peer, after clicking ↕ Sync):
 - `✓ in sync` — identical tips
@@ -238,7 +238,8 @@ Web UI               127.0.0.1:<uiPort> ← never tunneled, localhost only
   └─ /api/connect                       ← initiate peer handshake
   └─ /api/project-leader                ← set per-project leader boolean
   └─ /api/peer-status?peer=<name>       ← proxy to peer's /control/status
-  └─ /api/sync-status?project=<name>    ← git fetch + ahead/behind count
+  └─ /api/sync-status?project=<name>    ← git fetch + ahead/behind count (self-wires the peer remote)
+  └─ /api/clone                         ← clone a peer's project into PROJECTS_ROOT, register + wire peer remote
 
 Tunnel               (cloudflared/localtunnel) → wraps only the git server port
 ```
