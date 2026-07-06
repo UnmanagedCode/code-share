@@ -173,14 +173,18 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
     throw new Error(`Failed to reach peer at ${registerUrl}: ${e.message}`);
   }
 
-  // Save peer in our instance config
-  const peers = cfg.peers || [];
+  // Save peer in our instance config. Re-read fresh rather than reusing the
+  // `cfg` snapshot from before the network round-trip above — another request
+  // (e.g. a runtime tunnel start/stop) may have written config.json meanwhile,
+  // and saving the stale snapshot here would silently revert that write.
+  const fresh = loadConfig();
+  const peers = fresh.peers || [];
   const existingIdx = peers.findIndex(p => p.name === name);
   const peerEntry = { name, url: peerBaseUrl, token: peerToken };
   if (existingIdx >= 0) peers[existingIdx] = peerEntry;
   else peers.push(peerEntry);
-  cfg.peers = peers;
-  saveConfig(cfg);
+  fresh.peers = peers;
+  saveConfig(fresh);
 
   // Fetch peer's current project leader flags so we can store them
   let peerLeaders = {};
