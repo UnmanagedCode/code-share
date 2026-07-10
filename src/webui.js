@@ -11,6 +11,7 @@ const tunnelManager = require('./tunnel-manager');
 const { handleMCP } = require('./mcp');
 
 const UI_HTML = path.join(__dirname, '../static/ui.html');
+const VENDOR_QRCODE_JS = path.join(__dirname, '../static/vendor/qrcode.js');
 
 // Authenticated GET to a peer's control endpoint
 function fetchJSON(url, token) {
@@ -277,6 +278,19 @@ async function startWebUI(uiPort) {
     if (req.url && req.url.startsWith('/api/')) {
       const handled = await handleAPI(req, res);
       if (handled) return;
+    }
+
+    // Vendored QR code generator (offline-capable, no CDN dependency)
+    if (req.method === 'GET' && req.url === '/vendor/qrcode.js') {
+      try {
+        const js = fs.readFileSync(VENDOR_QRCODE_JS, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Content-Length': Buffer.byteLength(js) });
+        res.end(js);
+      } catch {
+        res.writeHead(500);
+        res.end('Vendor file not found');
+      }
+      return;
     }
 
     // Serve UI

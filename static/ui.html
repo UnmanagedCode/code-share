@@ -57,6 +57,7 @@
   }
 </style>
 <script src="/pluginBridge.js" defer></script>
+<script src="/vendor/qrcode.js"></script>
 </head>
 <body>
 <h1>code-share</h1>
@@ -66,7 +67,10 @@
   <div class="row"><span class="label">Status</span><span class="val" id="s-status">Loading…</span></div>
   <div class="row"><span class="label">LAN URL</span><span class="val" id="s-lan">—</span><button class="copy-btn" onclick="copy('s-lan')">Copy</button></div>
   <div class="row"><span class="label">Tunnel URL</span><span class="val" id="s-tunnel">—</span><button class="copy-btn" onclick="copy('s-tunnel')">Copy</button><button id="tunnel-btn" onclick="tunnelBtnClick()">Start tunnel</button></div>
-  <div class="row"><span class="label">Connection</span><span class="val" id="s-cs">—</span><button class="copy-btn" onclick="copy('s-cs')">Copy</button></div>
+  <div class="row"><span class="label">Connection</span><span class="val" id="s-cs">—</span><button class="copy-btn" onclick="copy('s-cs')">Copy</button><button class="secondary" id="qr-btn" onclick="toggleQR()" disabled>Show QR</button></div>
+  <div id="qr-panel" style="display:none; margin-top:0.75rem; text-align:center">
+    <div id="qr-code" style="display:inline-block; background:#fff; padding:12px; border-radius:6px; line-height:0"></div>
+  </div>
   <div id="tunnel-msg" style="font-size:0.85rem;margin-top:0.25rem"></div>
 </div>
 
@@ -155,6 +159,13 @@ function renderStatus(s) {
   } else {
     csEl.textContent = '— (start tunnel or connect LAN first)';
     csEl.style.color = '#8b949e';
+  }
+
+  const qrBtn = document.getElementById('qr-btn');
+  qrBtn.disabled = !cs;
+  if (!cs) {
+    document.getElementById('qr-panel').style.display = 'none';
+    qrBtn.textContent = 'Show QR';
   }
 
   renderTunnelButton(s);
@@ -479,6 +490,27 @@ async function doConnect() {
 function copy(id) {
   const text = document.getElementById(id).textContent;
   if (text && text !== '—' && !text.startsWith('—')) navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function toggleQR() {
+  const text = document.getElementById('s-cs').textContent;
+  if (!text || text === '—' || text.startsWith('—')) return;
+
+  const panel = document.getElementById('qr-panel');
+  const btn = document.getElementById('qr-btn');
+  const showing = panel.style.display !== 'none';
+  if (showing) {
+    panel.style.display = 'none';
+    btn.textContent = 'Show QR';
+    return;
+  }
+
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  document.getElementById('qr-code').innerHTML = qr.createSvgTag(4);
+  panel.style.display = 'block';
+  btn.textContent = 'Hide QR';
 }
 
 function esc(s) {
