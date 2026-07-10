@@ -200,7 +200,7 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 
 | Section | What it shows |
 |---------|--------------|
-| **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers). A **Start tunnel** / **Stop tunnel** button brings up (or tears down) a cloudflared tunnel while `serve` keeps running — no restart needed. Starting can take up to ~30s (the button shows a busy state); the Tunnel URL and `cs1:` string update live once it's up. |
+| **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers). A **Start tunnel** / **Stop tunnel** button brings up (or tears down) a cloudflared tunnel while `serve` keeps running — no restart needed. Starting can take up to ~30s (the button shows a busy state); the Tunnel URL and `cs1:` string update live once it's up. A **Show QR** button renders the Connection string as a QR code (toggle to hide) so a phone on the same LAN can scan it instead of copy/pasting; disabled until a valid Connection string exists. |
 | **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project Leader checkbox |
 | **Connect a Peer** | Paste a peer's `cs1:` connection string + give the peer a local name |
 | **Connected Peers** | Per peer: a **Sync button + ahead/behind badge** for every project both sides share (live peer catalog ∩ local registry, independent of registry peer-wiring state), and a **Clone button** for projects the peer exposes that you don't have locally |
@@ -246,6 +246,7 @@ Web UI               127.0.0.1:<uiPort> ← never tunneled, localhost only
   └─ /api/tunnel/start                  ← start a tunnel while serve is running (body: {type?}, default cloudflared)
   └─ /api/tunnel/stop                   ← stop the active tunnel, back to LAN-only
   └─ /api/mcp                           ← MCP tool bridge (status/share/sync), see "Run as a code-conductor plugin"
+  └─ /vendor/qrcode.js                  ← vendored MIT QR generator (static/vendor/qrcode.js), powers the "Show QR" button, no CDN/network dependency
 
 Tunnel               (cloudflared/localtunnel) → wraps only the git server port
 ```
