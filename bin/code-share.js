@@ -38,7 +38,23 @@ program
     if (opts.token) cfg.token = opts.token;
     if (opts.mdns !== undefined) cfg.mdns = opts.mdns;
 
-    const { port, uiPort, tunnel, token } = cfg;
+    // uiPort precedence: explicit --ui-port flag > $PORT (injected by a
+    // code-conductor plugin launch) > persisted config default. Only an
+    // explicit flag is written back to cfg (see saveConfig below), so a
+    // conductor-assigned ephemeral $PORT never clobbers the standalone default.
+    const effectiveUiPort = (!opts.uiPort && process.env.PORT)
+      ? parseInt(process.env.PORT, 10)
+      : cfg.uiPort;
+
+    // tunnel precedence: explicit --tunnel flag > forced 'none' when launched
+    // by the conductor (detected via $CONDUCTOR_PLUGIN_ID, always injected for
+    // a supervised plugin backend) > persisted config default. Not persisted,
+    // so a later standalone run is unaffected.
+    const effectiveTunnel = opts.tunnel
+      ? cfg.tunnel
+      : (process.env.CONDUCTOR_PLUGIN_ID ? 'none' : cfg.tunnel);
+
+    const { port, token } = cfg;
 
     const shared = loadRegistry();
     if (shared.length === 0) {
@@ -68,25 +84,25 @@ program
 
     // Tunnel
     cfg.tunnelUrl = null;
-    if (tunnel !== 'none') {
-      console.log(`Starting ${tunnel} tunnel...`);
+    if (effectiveTunnel !== 'none') {
+      console.log(`Starting ${effectiveTunnel} tunnel...`);
       try {
-        const t = await startTunnel(tunnel, port);
+        const t = await startTunnel(effectiveTunnel, port);
         if (t.url) {
           cfg.tunnelUrl = tunnelManager.toAuthedUrl(t.url, token);
-          tunnelManager.setActive(tunnel, t.stop, cfg.tunnelUrl);
+          tunnelManager.setActive(effectiveTunnel, t.stop, cfg.tunnelUrl);
           console.log(`Tunnel URL: ${cfg.tunnelUrl}`);
         }
       } catch (e) {
-        console.warn(`Tunnel failed (${tunnel}): ${e.message}. Continuing LAN-only.`);
+        console.warn(`Tunnel failed (${effectiveTunnel}): ${e.message}. Continuing LAN-only.`);
       }
     }
 
     saveConfig(cfg);
 
     // Start web UI (localhost only — never tunneled)
-    await startWebUI(uiPort);
-    console.log(`Web UI: http://127.0.0.1:${uiPort}`);
+    await startWebUI(effectiveUiPort);
+    console.log(`Web UI: http://127.0.0.1:${effectiveUiPort}`);
     console.log('\nPress Ctrl+C to stop.');
 
     process.on('SIGINT', () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); });

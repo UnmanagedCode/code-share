@@ -234,7 +234,8 @@ External HTTP server  0.0.0.0:<port>    ← auth (Basic x:<token>) + receive-pac
   └─ /control/status   GET             ← catalog for authed peers (exposes per-project leader boolean)
 
 Web UI               127.0.0.1:<uiPort> ← never tunneled, localhost only
-  └─ /api/status                        ← config + registry
+  └─ /api/health                        ← cheap liveness probe, no auth/side effects (no token in response)
+  └─ /api/status                        ← config + registry (includes the plaintext token)
   └─ /api/projects                      ← scanned git repos
   └─ /api/share|unshare                 ← manage registry
   └─ /api/connect                       ← initiate peer handshake
@@ -244,6 +245,7 @@ Web UI               127.0.0.1:<uiPort> ← never tunneled, localhost only
   └─ /api/clone                         ← clone a peer's project into PROJECTS_ROOT, register + wire peer remote
   └─ /api/tunnel/start                  ← start a tunnel while serve is running (body: {type?}, default cloudflared)
   └─ /api/tunnel/stop                   ← stop the active tunnel, back to LAN-only
+  └─ /api/mcp                           ← MCP tool bridge (status/share/sync), see "Run as a code-conductor plugin"
 
 Tunnel               (cloudflared/localtunnel) → wraps only the git server port
 ```
@@ -260,10 +262,21 @@ code-share never touches the working tree or commit history of shared repos. It 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PROJECTS_ROOT` | parent of code-share dir | Root scanned by the web UI for discoverable git repos |
+| `PORT` | (unset) | When set, overrides `uiPort` for that run only (see "Run as a code-conductor plugin"). Never affects the git server port. |
+| `CONDUCTOR_PLUGIN_ID` | (unset) | When set, `serve` defaults the tunnel to `none` for that run only, instead of the persisted default. |
+
+## Run as a code-conductor plugin
+
+code-share can be installed as a code-conductor plugin via the `conductor.plugin.json` manifest at the repo root. The conductor supervises `node bin/code-share.js serve` as the backend, iframes the web UI through its reverse proxy at `/plugins/code-share/...`, and forwards three MCP tools (`code-share__status`, `code-share__share`, `code-share__sync`) to the existing `status`/`share`/`sync` logic.
+
+- **UI port**: `serve` binds the web UI to `$PORT` when the conductor sets it (precedence: explicit `--ui-port` flag > `$PORT` > persisted `data/config.json` default of `9420`). Neither `$PORT` nor a bare plugin launch ever persists a new default — a later standalone `serve` still uses whatever was last explicitly configured. The git server port (`--port`, default `9419`) is completely independent of `$PORT`.
+- **Tunnel**: a plugin launch (detected via `$CONDUCTOR_PLUGIN_ID`, which the conductor always injects) defaults the tunnel to `none` for that run only — the persisted `data/config.json` tunnel default is untouched, so standalone runs are unaffected.
+- **Health check**: the manifest's `healthPath` is `/api/health`, a dedicated no-op endpoint (distinct from `/api/status`, which echoes the plaintext instance token and isn't suitable for an arbitrary prober).
+- **Known limitation**: like the rest of the web UI, `/api/*` (including `/api/mcp`) has no authentication of its own beyond the web UI's loopback-only binding when run standalone. Once proxied by the conductor, this surface is reachable to anyone who can reach the conductor's own UI/MCP bridge — consistent with code-conductor's model of treating enabled plugins as trusted code running with the conductor's own privileges, not a gap newly introduced by this integration.
 
 ## Security notes
 
-- The tunnel carries only the git read-only endpoint. The web UI is localhost-only and is never tunneled.
+- The tunnel carries only the git read-only endpoint. The web UI is localhost-only and is never tunneled — except indirectly through the code-conductor reverse proxy when installed as a plugin (see above).
 - Push is blocked at two independent layers (HTTP server + git server event hook).
 - Token auth is enforced before any request is routed, including control endpoints.
 - The `cs1:` connection string embeds the token — treat it like a password and share only over secure channels.

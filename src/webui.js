@@ -8,6 +8,7 @@ const registry = require('./registry');
 const peer = require('./peer');
 const { getSyncState } = require('./sync');
 const tunnelManager = require('./tunnel-manager');
+const { handleMCP } = require('./mcp');
 
 const UI_HTML = path.join(__dirname, '../static/ui.html');
 
@@ -57,6 +58,19 @@ function sendJSON(res, code, obj) {
 async function handleAPI(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname;
+
+  // Cheap, side-effect-free liveness probe (used as the plugin manifest's
+  // healthPath) — deliberately separate from /api/status, which echoes the
+  // plaintext instance token and shouldn't be hit by an arbitrary prober.
+  if (req.method === 'GET' && pathname === '/api/health') {
+    sendJSON(res, 200, { ok: true });
+    return true;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/mcp') {
+    await handleMCP(req, res, readBody, sendJSON);
+    return true;
+  }
 
   if (req.method === 'GET' && pathname === '/api/status') {
     const cfg = loadConfig();
@@ -266,7 +280,7 @@ async function startWebUI(uiPort) {
     }
 
     // Serve UI
-    if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+    if (req.method === 'GET' && (req.url === '/' || req.url === '' || req.url === '/index.html')) {
       try {
         const html = fs.readFileSync(UI_HTML, 'utf8');
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });

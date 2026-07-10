@@ -1,0 +1,50 @@
+{
+  "id": "code-share",
+  "name": "Code Share",
+  "version": "1.0.0",
+  "pluginApi": 1,
+  "backend": {
+    "start": "node bin/code-share.js serve",
+    "healthPath": "/api/health"
+  },
+  "frontend": { "path": "/", "navLabel": "Code Share" },
+  "mcp": {
+    "endpoint": "/api/mcp",
+    "timeoutMs": 30000,
+    "tools": [
+      {
+        "name": "status",
+        "description": "Show this code-share instance's URLs, tunnel state, shared projects, and connected peers.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+      },
+      {
+        "name": "share",
+        "description": "Add a local git repo to the shared scope so peers can fetch it read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "repoPath": { "type": "string", "description": "Filesystem path to the git repo to share" },
+            "name": { "type": "string", "description": "Name to serve the repo under (default: directory basename)" },
+            "leader": { "type": "boolean", "description": "Mark this side as leader for this project (default false)" }
+          },
+          "required": ["repoPath"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "sync",
+        "description": "Pull-only sync of a shared project from a connected peer (never pushes); returns the resulting ahead/behind state.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": { "type": "string", "description": "Project name to sync (omit if exactly one project is shared)" },
+            "remote": { "type": "string", "description": "Peer remote name (default: peer)" },
+            "branch": { "type": "string", "description": "Remote branch to fetch (default: HEAD)" },
+            "useRebase": { "type": "boolean", "description": "Use rebase instead of merge (default false)" }
+          },
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}
