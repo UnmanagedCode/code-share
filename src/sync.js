@@ -131,6 +131,8 @@ async function sync(projectName, opts = {}) {
   if (log.stdout.trim()) {
     console.log('Recent commits:\n' + log.stdout.trim().split('\n').map(l => '  ' + l).join('\n'));
   }
+
+  return { project: proj.name };
 }
 
 // Read-only divergence check: fetches remote then counts ahead/behind commits.

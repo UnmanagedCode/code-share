@@ -56,6 +56,7 @@
     #status-card .row .val { flex-basis: 100%; }
   }
 </style>
+<script src="/pluginBridge.js" defer></script>
 </head>
 <body>
 <h1>code-share</h1>
@@ -123,8 +124,8 @@ function parseConnectionString(s) {
 async function load() {
   try {
     const [s, p] = await Promise.all([
-      fetch('/api/status').then(r => r.json()),
-      fetch('/api/projects').then(r => r.json())
+      fetch('api/status').then(r => r.json()),
+      fetch('api/projects').then(r => r.json())
     ]);
     status = s;
     sharedRegistry = s.shared || [];
@@ -277,7 +278,7 @@ async function loadPeerProjects(peerName) {
 
   let data;
   try {
-    data = await fetch(`/api/peer-status?peer=${encodeURIComponent(peerName)}`).then(r => r.json());
+    data = await fetch(`api/peer-status?peer=${encodeURIComponent(peerName)}`).then(r => r.json());
   } catch (e) {
     data = { error: e.message };
   }
@@ -315,7 +316,7 @@ async function loadPeerProjects(peerName) {
 // ── Actions ──────────────────────────────────────────────────────────────────
 
 async function share(repoPath, name) {
-  const resp = await fetch('/api/share', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: repoPath, name }) });
+  const resp = await fetch('api/share', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ path: repoPath, name }) });
   const data = await resp.json();
   if (data.error) alert('Error: ' + data.error);
   else load();
@@ -323,7 +324,7 @@ async function share(repoPath, name) {
 
 async function unshare(name) {
   if (!confirm(`Unshare "${name}"?`)) return;
-  const resp = await fetch('/api/unshare', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+  const resp = await fetch('api/unshare', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
   const data = await resp.json();
   if (data.error) alert('Error: ' + data.error);
   else load();
@@ -340,7 +341,7 @@ async function startTunnelFromUI() {
   tunnelBusy = true;
   if (status) renderTunnelButton(status);
   try {
-    const resp = await fetch('/api/tunnel/start', {
+    const resp = await fetch('api/tunnel/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'cloudflared' })
@@ -361,7 +362,7 @@ async function stopTunnel() {
   tunnelBusy = true;
   if (status) renderTunnelButton(status);
   try {
-    const resp = await fetch('/api/tunnel/stop', { method: 'POST' });
+    const resp = await fetch('api/tunnel/stop', { method: 'POST' });
     const data = await resp.json();
     if (data.error && msg) msg.innerHTML = `<span class="error">${esc(data.error)}</span>`;
   } catch (e) {
@@ -373,7 +374,7 @@ async function stopTunnel() {
 }
 
 async function setProjectLeader(name, leader) {
-  const resp = await fetch('/api/project-leader', {
+  const resp = await fetch('api/project-leader', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, leader })
@@ -388,7 +389,7 @@ async function checkPeerProjectSync(projectName, peerName, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     const data = await fetch(
-      `/api/sync-status?project=${encodeURIComponent(projectName)}&remote=${encodeURIComponent(peerName)}`
+      `api/sync-status?project=${encodeURIComponent(projectName)}&remote=${encodeURIComponent(peerName)}`
     ).then(r => r.json());
     if (!indicator) return;
     if (data.error) {
@@ -416,7 +417,7 @@ async function clonePeerProject(projectName, peerName, btn) {
   if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> cloning…</span>';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
-    const data = await fetch('/api/clone', {
+    const data = await fetch('api/clone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ peer: peerName, project: projectName })
@@ -458,7 +459,7 @@ async function doConnect() {
 
   msg.innerHTML = '<span style="color:#8b949e">Connecting…</span>';
   try {
-    const resp = await fetch('/api/connect', {
+    const resp = await fetch('api/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: peerUrl, token: peerToken, name })
