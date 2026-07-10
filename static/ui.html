@@ -28,6 +28,7 @@
   button.danger:hover { background: #da3633; }
   button.secondary { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
   button.secondary:hover { background: #30363d; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   input { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 6px 10px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; width: 100%; }
   .copy-btn { min-width: 60px; background: #1c3452; color: #58a6ff; border: 1px solid #1c3452; }
   .copy-btn:hover { background: #264a70; }
@@ -71,6 +72,7 @@
   <div id="qr-panel" style="display:none; margin-top:0.75rem; text-align:center">
     <div id="qr-code" style="display:inline-block; background:#fff; padding:12px; border-radius:6px; line-height:0"></div>
   </div>
+  <div id="qr-msg" style="font-size:0.85rem;margin-top:0.25rem"></div>
   <div id="tunnel-msg" style="font-size:0.85rem;margin-top:0.25rem"></div>
 </div>
 
@@ -498,6 +500,9 @@ function toggleQR() {
 
   const panel = document.getElementById('qr-panel');
   const btn = document.getElementById('qr-btn');
+  const msg = document.getElementById('qr-msg');
+  if (msg) msg.innerHTML = '';
+
   const showing = panel.style.display !== 'none';
   if (showing) {
     panel.style.display = 'none';
@@ -505,12 +510,16 @@ function toggleQR() {
     return;
   }
 
-  const qr = qrcode(0, 'M');
-  qr.addData(text);
-  qr.make();
-  document.getElementById('qr-code').innerHTML = qr.createSvgTag(4);
-  panel.style.display = 'block';
-  btn.textContent = 'Hide QR';
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    document.getElementById('qr-code').innerHTML = qr.createSvgTag(4);
+    panel.style.display = 'block';
+    btn.textContent = 'Hide QR';
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span class="error">Could not generate QR code: ${esc(e.message)}</span>`;
+  }
 }
 
 function esc(s) {
