@@ -511,8 +511,9 @@ function toggleQR() {
   }
 
   try {
+    const qrText = text.startsWith('cs1:') ? 'codeshare://' + text.slice(4) : text;
     const qr = qrcode(0, 'M');
-    qr.addData(text);
+    qr.addData(qrText);
     qr.make();
     document.getElementById('qr-code').innerHTML = qr.createSvgTag(4);
     panel.style.display = 'block';
