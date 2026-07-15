@@ -494,6 +494,20 @@ function copy(id) {
   if (text && text !== '—' && !text.startsWith('—')) navigator.clipboard.writeText(text).catch(() => {});
 }
 
+function qrTextFor(text) {
+  if (!text.startsWith('cs1:')) return text;
+  try {
+    const payload = text.slice(4);
+    const b64 = payload.replace(/-/g,'+').replace(/_/g,'/');
+    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+    const peerUrl = JSON.parse(atob(padded)).url;
+    if (!peerUrl) return text;
+    return peerUrl.replace(/\/+$/, '') + '/connect#' + payload;
+  } catch (e) {
+    return text;
+  }
+}
+
 function toggleQR() {
   const text = document.getElementById('s-cs').textContent;
   if (!text || text === '—' || text.startsWith('—')) return;
@@ -511,7 +525,7 @@ function toggleQR() {
   }
 
   try {
-    const qrText = text.startsWith('cs1:') ? 'codeshare://' + text.slice(4) : text;
+    const qrText = qrTextFor(text);
     const qr = qrcode(0, 'M');
     qr.addData(qrText);
     qr.make();
