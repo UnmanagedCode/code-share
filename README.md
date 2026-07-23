@@ -282,3 +282,7 @@ code-share can be installed as a code-conductor plugin via the `conductor.plugin
 - Token auth is enforced before any request is routed, including control endpoints.
 - The `cs1:` connection string embeds the token — treat it like a password and share only over secure channels.
 - cloudflared must be installed separately (see Prerequisites). The app does not download it.
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). Copyright © 2026 UnmanagedCode. See the [LICENSE](LICENSE) file for details.
