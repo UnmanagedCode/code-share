@@ -260,8 +260,8 @@ function syncRowHTML(peerName, name) {
   return `<div class="peer-sync-row" id="psrow-${esc(peerName)}-${esc(name)}">
       <span class="badge badge-green">${esc(name)}</span>
       <span class="sync-indicator" id="psi-${esc(peerName)}-${esc(name)}"></span>
-      <button class="secondary" onclick="fetchPeerProjectSync('${esc(name)}','${esc(peerName)}',this)">↻ Fetch</button>
-      <button onclick="syncPeerProject('${esc(name)}','${esc(peerName)}',this)">↕ Sync</button>
+      <button class="secondary" id="psf-${esc(peerName)}-${esc(name)}" onclick="fetchPeerProjectSync('${esc(name)}','${esc(peerName)}')">↻ Fetch</button>
+      <button id="pss-${esc(peerName)}-${esc(name)}" onclick="syncPeerProject('${esc(name)}','${esc(peerName)}')">↕ Sync</button>
     </div>`;
 }
 
@@ -404,24 +404,38 @@ function renderSyncBadge(state, ahead, behind) {
        : `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
 }
 
-async function fetchPeerProjectSync(projectName, peerName, btn) {
-  const indicator = document.getElementById(`psi-${peerName}-${projectName}`);
-  if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> ↻</span>';
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+// The periodic setInterval(load, 15000) refresh can rebuild a peer's project
+// list (syncRowHTML) while a Fetch/Sync request is in flight, replacing the
+// row's DOM nodes out from under any reference captured at call time. Always
+// re-resolve by id — including AFTER the await — so a badge/button update
+// never lands on a detached, orphaned node.
+function setSyncIndicator(peerName, projectName, html) {
+  const el = document.getElementById(`psi-${peerName}-${projectName}`);
+  if (el) el.innerHTML = html;
+}
+
+function setSyncButton(id, disabled, text) {
+  const btn = document.getElementById(id);
+  if (btn) { btn.disabled = disabled; btn.textContent = text; }
+}
+
+async function fetchPeerProjectSync(projectName, peerName) {
+  const btnId = `psf-${peerName}-${projectName}`;
+  setSyncIndicator(peerName, projectName, '<span style="color:#8b949e"> ↻</span>');
+  setSyncButton(btnId, true, '…');
   try {
     const data = await fetch(
       `api/sync-status?project=${encodeURIComponent(projectName)}&remote=${encodeURIComponent(peerName)}`
     ).then(r => r.json());
-    if (!indicator) return;
     if (data.error) {
-      indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">err</span>`;
+      setSyncIndicator(peerName, projectName, ` <span class="badge badge-gray" title="${esc(data.error)}">err</span>`);
     } else {
-      indicator.innerHTML = ' ' + renderSyncBadge(data.state, data.ahead, data.behind);
+      setSyncIndicator(peerName, projectName, ' ' + renderSyncBadge(data.state, data.ahead, data.behind));
     }
   } catch (e) {
-    if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">err</span>`;
+    setSyncIndicator(peerName, projectName, ` <span class="badge badge-gray" title="${esc(e.message)}">err</span>`);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '↻ Fetch'; }
+    setSyncButton(btnId, false, '↻ Fetch');
   }
 }
 
@@ -430,26 +444,25 @@ async function fetchPeerProjectSync(projectName, peerName, btn) {
 // success; on failure shows a "sync failed" badge with the full error (e.g. a
 // rebase-conflict file list) in the title, since sync errors are the whole
 // reason this button exists — they must not be swallowed silently.
-async function syncPeerProject(projectName, peerName, btn) {
-  const indicator = document.getElementById(`psi-${peerName}-${projectName}`);
-  if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> syncing…</span>';
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+async function syncPeerProject(projectName, peerName) {
+  const btnId = `pss-${peerName}-${projectName}`;
+  setSyncIndicator(peerName, projectName, '<span style="color:#8b949e"> syncing…</span>');
+  setSyncButton(btnId, true, '…');
   try {
     const data = await fetch('api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: projectName, remote: peerName })
     }).then(r => r.json());
-    if (!indicator) return;
     if (data.error) {
-      indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">sync failed</span>`;
+      setSyncIndicator(peerName, projectName, ` <span class="badge badge-gray" title="${esc(data.error)}">sync failed</span>`);
     } else {
-      indicator.innerHTML = ' ' + renderSyncBadge(data.state, data.ahead, data.behind);
+      setSyncIndicator(peerName, projectName, ' ' + renderSyncBadge(data.state, data.ahead, data.behind));
     }
   } catch (e) {
-    if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">sync failed</span>`;
+    setSyncIndicator(peerName, projectName, ` <span class="badge badge-gray" title="${esc(e.message)}">sync failed</span>`);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '↕ Sync'; }
+    setSyncButton(btnId, false, '↕ Sync');
   }
 }
 

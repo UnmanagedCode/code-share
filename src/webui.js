@@ -56,6 +56,20 @@ function sendJSON(res, code, obj) {
   res.end(body);
 }
 
+// Self-heal: if the project is local and we know this peer, make sure its git
+// remote + registry peer entry exist before touching it. The Connected Peers
+// UI shows a Fetch/Sync button for any project both sides share (live peer
+// catalog ∩ local registry), which may include projects whose peer remote was
+// never wired (e.g. shared before the wiring fix). Idempotent. Shared by both
+// /api/sync-status and /api/sync so the two routes can't drift out of step.
+function selfHealPeerRemote(projectName, remoteName) {
+  const proj = registry.findProject(projectName);
+  if (!proj) return;
+  const pr = (loadConfig().peers || []).find(p => p.name === remoteName);
+  if (!pr) return;
+  try { peer.wirePeerRemote(projectName, proj.path, pr); } catch {}
+}
+
 async function handleAPI(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname;
@@ -251,16 +265,7 @@ async function handleAPI(req, res) {
     const remoteName  = url.searchParams.get('remote') || 'peer';
     if (!projectName) { sendJSON(res, 400, { error: 'project query param is required' }); return true; }
     try {
-      // Self-heal: if the project is local and we know this peer, make sure its
-      // git remote + registry peer entry exist before checking. The Connected
-      // Peers UI shows a Sync button for any project both sides share (live
-      // catalog ∩ local registry), which may include projects whose peer remote
-      // was never wired (e.g. shared before the wiring fix). Idempotent.
-      const proj = registry.findProject(projectName);
-      if (proj) {
-        const pr = (loadConfig().peers || []).find(p => p.name === remoteName);
-        if (pr) { try { peer.wirePeerRemote(projectName, proj.path, pr); } catch {} }
-      }
+      selfHealPeerRemote(projectName, remoteName);
       const state = getSyncState(projectName, { remote: remoteName });
       sendJSON(res, 200, state);
     } catch (e) {
@@ -281,6 +286,7 @@ async function handleAPI(req, res) {
     const { project, remote = 'peer', branch, useRebase = false } = body;
     if (!project) { sendJSON(res, 400, { error: 'project is required' }); return true; }
     try {
+      selfHealPeerRemote(project, remote);
       const outcome = await sync(project, { remote, branch, useRebase: !!useRebase });
       const state = getSyncState(outcome.project, { remote });
       sendJSON(res, 200, { ok: true, ...state });
