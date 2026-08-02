@@ -6,7 +6,7 @@ const path = require('path');
 const { loadConfig, saveConfig, loadRegistry, PROJECTS_ROOT } = require('./config');
 const registry = require('./registry');
 const peer = require('./peer');
-const { getSyncState } = require('./sync');
+const { sync, getSyncState } = require('./sync');
 const tunnelManager = require('./tunnel-manager');
 const { handleMCP } = require('./mcp');
 
@@ -263,6 +263,27 @@ async function handleAPI(req, res) {
       }
       const state = getSyncState(projectName, { remote: remoteName });
       sendJSON(res, 200, state);
+    } catch (e) {
+      sendJSON(res, 500, { error: e.message });
+    }
+    return true;
+  }
+
+  // Perform a real pull-only sync (fetch + merge/rebase per src/sync.js's
+  // leader-derived mode) and return the post-sync ahead/behind state, mirroring
+  // the MCP bridge's `sync` tool (src/mcp.js) and the CLI `sync` command.
+  if (req.method === 'POST' && pathname === '/api/sync') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch {
+      sendJSON(res, 400, { error: 'Invalid JSON' });
+      return true;
+    }
+    const { project, remote = 'peer', branch, useRebase = false } = body;
+    if (!project) { sendJSON(res, 400, { error: 'project is required' }); return true; }
+    try {
+      const outcome = await sync(project, { remote, branch, useRebase: !!useRebase });
+      const state = getSyncState(outcome.project, { remote });
+      sendJSON(res, 200, { ok: true, ...state });
     } catch (e) {
       sendJSON(res, 500, { error: e.message });
     }

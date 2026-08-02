@@ -260,7 +260,8 @@ function syncRowHTML(peerName, name) {
   return `<div class="peer-sync-row" id="psrow-${esc(peerName)}-${esc(name)}">
       <span class="badge badge-green">${esc(name)}</span>
       <span class="sync-indicator" id="psi-${esc(peerName)}-${esc(name)}"></span>
-      <button class="secondary" onclick="checkPeerProjectSync('${esc(name)}','${esc(peerName)}',this)">↕ Sync</button>
+      <button class="secondary" onclick="fetchPeerProjectSync('${esc(name)}','${esc(peerName)}',this)">↻ Fetch</button>
+      <button onclick="syncPeerProject('${esc(name)}','${esc(peerName)}',this)">↕ Sync</button>
     </div>`;
 }
 
@@ -396,7 +397,14 @@ async function setProjectLeader(name, leader) {
   if (data.error) alert('Error setting leader: ' + data.error);
 }
 
-async function checkPeerProjectSync(projectName, peerName, btn) {
+function renderSyncBadge(state, ahead, behind) {
+  return state === 'in-sync'        ? `<span class="badge badge-green">✓ in sync</span>`
+       : state === 'local-ahead'    ? `<span class="badge badge-blue">↑${ahead} ahead</span>`
+       : state === 'remote-ahead'   ? `<span class="badge badge-yellow">↓${behind} behind</span>`
+       : `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
+}
+
+async function fetchPeerProjectSync(projectName, peerName, btn) {
   const indicator = document.getElementById(`psi-${peerName}-${projectName}`);
   if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> ↻</span>';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
@@ -408,15 +416,38 @@ async function checkPeerProjectSync(projectName, peerName, btn) {
     if (data.error) {
       indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">err</span>`;
     } else {
-      const { state, ahead, behind } = data;
-      const b = state === 'in-sync'        ? `<span class="badge badge-green">✓ in sync</span>`
-              : state === 'local-ahead'    ? `<span class="badge badge-blue">↑${ahead} ahead</span>`
-              : state === 'remote-ahead'   ? `<span class="badge badge-yellow">↓${behind} behind</span>`
-              : `<span class="badge badge-orange">↕ diverged (↑${ahead} ↓${behind})</span>`;
-      indicator.innerHTML = ' ' + b;
+      indicator.innerHTML = ' ' + renderSyncBadge(data.state, data.ahead, data.behind);
     }
   } catch (e) {
     if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">err</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Fetch'; }
+  }
+}
+
+// Real pull-only sync (POST /api/sync): fetch + merge/rebase per src/sync.js's
+// leader-derived mode, never pushes. Refreshes the badge from the response on
+// success; on failure shows a "sync failed" badge with the full error (e.g. a
+// rebase-conflict file list) in the title, since sync errors are the whole
+// reason this button exists — they must not be swallowed silently.
+async function syncPeerProject(projectName, peerName, btn) {
+  const indicator = document.getElementById(`psi-${peerName}-${projectName}`);
+  if (indicator) indicator.innerHTML = '<span style="color:#8b949e"> syncing…</span>';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const data = await fetch('api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: projectName, remote: peerName })
+    }).then(r => r.json());
+    if (!indicator) return;
+    if (data.error) {
+      indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(data.error)}">sync failed</span>`;
+    } else {
+      indicator.innerHTML = ' ' + renderSyncBadge(data.state, data.ahead, data.behind);
+    }
+  } catch (e) {
+    if (indicator) indicator.innerHTML = ` <span class="badge badge-gray" title="${esc(e.message)}">sync failed</span>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '↕ Sync'; }
   }
