@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>code-share — connect</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #0d1117; color: #e6edf3; padding: 1.5rem; max-width: 600px; margin: 0 auto; }
+  h1 { color: #58a6ff; margin-bottom: 1rem; font-size: 1.3rem; }
+  p { color: #8b949e; margin-bottom: 1rem; line-height: 1.5; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+  .cs { color: #e6edf3; word-break: break-all; font-size: 0.9rem; margin-bottom: 0.75rem; }
+  button { font-family: monospace; background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; }
+  button:hover { background: #30363d; }
+  .error { color: #f85149; }
+</style>
+</head>
+<body>
+<h1>code-share connection</h1>
+<div id="content">
+  <p>Reading connection data…</p>
+</div>
+<script>
+function b64urlToJson(payload) {
+  const b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64 + '=='.slice(0, (4 - b64.length % 4) % 4);
+  return JSON.parse(atob(pad));
+}
+
+function render() {
+  const content = document.getElementById('content');
+  const payload = location.hash.slice(1);
+
+  if (!payload) {
+    content.innerHTML = '<p class="error">No connection data in this link.</p>';
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = b64urlToJson(payload);
+    if (!parsed || !parsed.url || !parsed.token) throw new Error('missing fields');
+  } catch (e) {
+    content.innerHTML = '<p class="error">Could not read connection data from this link.</p>';
+    return;
+  }
+
+  const cs = 'cs1:' + payload;
+  content.innerHTML = `
+    <p>Paste this connection string into the <strong>Connect</strong> box on
+    <em>your own</em> code-share instance's web UI. Scanning this code does not
+    connect anything automatically.</p>
+    <div class="card">
+      <div class="cs" id="cs-text"></div>
+      <button id="copy-btn">Copy</button>
+    </div>
+  `;
+  document.getElementById('cs-text').textContent = cs;
+  document.getElementById('copy-btn').addEventListener('click', () => {
+    navigator.clipboard.writeText(cs).catch(() => {});
+  });
+}
+
+render();
+</script>
+</body>
+</html>

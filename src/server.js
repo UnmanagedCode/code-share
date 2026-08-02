@@ -1,9 +1,13 @@
 'use strict';
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { Git } = require('node-git-server');
 const { SERVE_DIR, loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
 const { addRemote, authedUrl } = require('./peer');
+
+const CONNECT_HTML = path.join(__dirname, '../static/connect.html');
 
 function parseBasicAuth(req) {
   const header = req.headers['authorization'];
@@ -106,6 +110,21 @@ async function startServer(port, token) {
   });
 
   const server = http.createServer(async (req, res) => {
+    // Public connect landing page — deliberately unauthenticated: the token
+    // lives only in the URL fragment (never sent to the server), so a phone
+    // scanning the QR has no credentials to offer here.
+    if (req.method === 'GET' && req.url === '/connect') {
+      try {
+        const html = fs.readFileSync(CONNECT_HTML, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
+        res.end(html);
+      } catch {
+        res.writeHead(500);
+        res.end('Connect page not found');
+      }
+      return;
+    }
+
     // Enforce auth on every request
     const providedToken = parseBasicAuth(req);
     if (providedToken !== token) {
