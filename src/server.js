@@ -49,6 +49,16 @@ async function handleRegister(req, res) {
     return;
   }
 
+  // Reject a malformed peer URL before the loop: authedUrl() calls new URL() and
+  // would throw TypeError per project, silently skipping every project while the
+  // register still returns 200 { ok: true }.
+  try {
+    new URL(peerUrl);
+  } catch {
+    sendJSON(res, 400, { error: `Invalid peer URL: ${peerUrl}` });
+    return;
+  }
+
   // projectLeaders: { [projName]: boolean }
   // Accept old projectRoles for backward compat (string 'leader' → true, else → false).
   const leaders = projectLeaders
@@ -56,13 +66,25 @@ async function handleRegister(req, res) {
 
   const reg = loadRegistry();
 
-  // Add peer to all shared projects with per-project leader boolean
+  // Add peer to all shared projects with per-project leader boolean. Wire the
+  // git remote first and only record the peer entry once it exists, so a
+  // broken/stale project (e.g. its dir is gone or not a git repo) is logged
+  // and skipped instead of claiming a remote that isn't there.
   for (const proj of reg) {
+    try {
+      addRemote(proj.path, peerName, authedUrl(peerUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken));
+    } catch (e) {
+      // NOTE: console.error is deliberate — on a server whose stdio is an
+      // orphaned socketpair (dead parent), Node's Console drops the bytes on
+      // EPIPE (ignoreErrors default). Do NOT "improve" this to a raw
+      // process.stderr.write(...): that would raise EPIPE unhandled and crash.
+      console.error(`Failed to wire remote '${peerName}' on ${proj.name}: ${e.message}`);
+      continue;
+    }
     const peerEntry = { name: peerName, url: peerUrl, token: peerToken, leader: leaders[proj.name] ?? false };
     const existing = proj.peers.findIndex(p => p.name === peerName);
     if (existing >= 0) proj.peers[existing] = peerEntry;
     else proj.peers.push(peerEntry);
-    addRemote(proj.path, peerName, authedUrl(peerUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken));
   }
   saveRegistry(reg);
 
