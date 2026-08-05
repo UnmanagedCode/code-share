@@ -62,7 +62,13 @@ async function handleRegister(req, res) {
     const existing = proj.peers.findIndex(p => p.name === peerName);
     if (existing >= 0) proj.peers[existing] = peerEntry;
     else proj.peers.push(peerEntry);
-    addRemote(proj.path, peerName, authedUrl(peerUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken));
+    try {
+      addRemote(proj.path, peerName, authedUrl(peerUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken));
+    } catch (e) {
+      // A broken/stale project (e.g. its dir is gone or not a git repo) must not
+      // kill the whole register — skip it and log the real git error.
+      console.error(`Failed to wire remote '${peerName}' on ${proj.name}: ${e.message}`);
+    }
   }
   saveRegistry(reg);
 

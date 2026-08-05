@@ -1,5 +1,5 @@
 'use strict';
-const { execSync, exec } = require('child_process');
+const { spawnSync } = require('child_process');
 const http = require('http');
 const https = require('https');
 const { loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
@@ -31,19 +31,39 @@ function buildConnectionString(base, token) {
   }
 }
 
+// Run a git command with piped stdio so its stderr is captured and surfaced.
+// Mirrors src/sync.js's run(): the child's stdout/stderr are fresh pipes, never
+// the server's (possibly orphaned) stdio, so a dead parent's closed sockets
+// can't SIGPIPE the child. Uses argv form (not `sh -c`) so credential-bearing
+// URLs and arbitrary paths need no shell quoting.
+function runGit(args, opts = {}) {
+  const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+  if (result.error) throw new Error(`Failed to run git: ${result.error.message}`);
+  return { stdout: result.stdout || '', stderr: result.stderr || '', code: result.status };
+}
+
 function cloneRepo(url, token, dir) {
   const cloneUrl = token ? authedUrl(url, token) : url;
   const target = dir || '.';
-  execSync(`git clone "${cloneUrl}" "${target}"`, { stdio: 'inherit' });
+  const r = runGit(['clone', cloneUrl, target]);
+  if (r.code !== 0) {
+    throw new Error((r.stderr || '').trim() || `git clone failed with status ${r.code}`);
+  }
 }
 
 function addRemote(repoPath, name, url) {
-  try {
-    execSync(`git -C "${repoPath}" remote add "${name}" "${url}"`, { stdio: 'ignore' });
-  } catch {
-    // Remote already exists — update URL
-    execSync(`git -C "${repoPath}" remote set-url "${name}" "${url}"`, { stdio: 'ignore' });
+  const add = runGit(['-C', repoPath, 'remote', 'add', name, url]);
+  if (add.code === 0) return;
+  // Fall back to set-url only when the remote actually exists; surface every
+  // other git failure with its real stderr instead of swallowing it.
+  if (/already exists/i.test(add.stderr)) {
+    const set = runGit(['-C', repoPath, 'remote', 'set-url', name, url]);
+    if (set.code !== 0) {
+      throw new Error((set.stderr || '').trim() || `git remote set-url failed with status ${set.code}`);
+    }
+    return;
   }
+  throw new Error((add.stderr || '').trim() || `git remote add failed with status ${add.code}`);
 }
 
 // Wire one peer's git remote + registry peer entry onto a project. Idempotent
