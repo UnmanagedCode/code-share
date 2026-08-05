@@ -193,19 +193,6 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
     throw new Error(`Failed to reach peer at ${registerUrl}: ${e.message}`);
   }
 
-  // Save peer in our instance config. Re-read fresh rather than reusing the
-  // `cfg` snapshot from before the network round-trip above — another request
-  // (e.g. a runtime tunnel start/stop) may have written config.json meanwhile,
-  // and saving the stale snapshot here would silently revert that write.
-  const fresh = loadConfig();
-  const peers = fresh.peers || [];
-  const existingIdx = peers.findIndex(p => p.name === name);
-  const peerEntry = { name, url: peerBaseUrl, token: peerToken };
-  if (existingIdx >= 0) peers[existingIdx] = peerEntry;
-  else peers.push(peerEntry);
-  fresh.peers = peers;
-  saveConfig(fresh);
-
   // Fetch peer's current project leader flags so we can store them
   let peerLeaders = {};
   try {
@@ -218,17 +205,43 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
     // peer status unreachable; peerEntry.leader defaults to false
   }
 
-  // Add peer to all shared projects in registry
+  // Add peer to all shared projects in registry. Wire the git remote first and
+  // only record the peer entry on a project once its remote actually exists, so
+  // a broken/stale project (e.g. its dir is gone or not a git repo) is logged
+  // and skipped instead of claiming a remote that isn't there.
   for (const proj of reg) {
     const authedPeerUrl = authedUrl(peerBaseUrl + '/' + proj.name + '.git', peerToken);
-    addRemote(proj.path, name, authedPeerUrl);
-
+    try {
+      addRemote(proj.path, name, authedPeerUrl);
+    } catch (e) {
+      // NOTE: console.error is deliberate — on a server whose stdio is an
+      // orphaned socketpair (dead parent), Node's Console drops the bytes on
+      // EPIPE (ignoreErrors default). Do NOT "improve" this to a raw
+      // process.stderr.write(...): that would raise EPIPE unhandled and crash.
+      console.error(`Failed to wire remote '${name}' on ${proj.name}: ${e.message}`);
+      continue;
+    }
     const pe = { name, url: peerBaseUrl, token: peerToken, leader: peerLeaders[proj.name] ?? false };
     const existingPeer = proj.peers.findIndex(p => p.name === name);
     if (existingPeer >= 0) proj.peers[existingPeer] = pe;
     else proj.peers.push(pe);
   }
   saveRegistry(reg);
+
+  // Persist the peer in our instance config only after the registry wiring is
+  // done, so a failed connect can't leave config.peers claiming a connection
+  // whose remotes were never wired. Re-read fresh rather than reusing the `cfg`
+  // snapshot from before the network round-trips above — another request (e.g.
+  // a runtime tunnel start/stop) may have written config.json meanwhile, and
+  // saving the stale snapshot here would silently revert that write.
+  const fresh = loadConfig();
+  const peers = fresh.peers || [];
+  const existingIdx = peers.findIndex(p => p.name === name);
+  const peerEntry = { name, url: peerBaseUrl, token: peerToken };
+  if (existingIdx >= 0) peers[existingIdx] = peerEntry;
+  else peers.push(peerEntry);
+  fresh.peers = peers;
+  saveConfig(fresh);
 
   return peerResp;
 }
