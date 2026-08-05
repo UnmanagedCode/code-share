@@ -210,7 +210,7 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   // a broken/stale project (e.g. its dir is gone or not a git repo) is logged
   // and skipped instead of claiming a remote that isn't there.
   for (const proj of reg) {
-    const authedPeerUrl = authedUrl(peerBaseUrl + '/' + proj.name + '.git', peerToken);
+    const authedPeerUrl = authedUrl(peerBaseUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken);
     try {
       addRemote(proj.path, name, authedPeerUrl);
     } catch (e) {
