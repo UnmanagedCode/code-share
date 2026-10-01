@@ -198,6 +198,9 @@ A tunnel can also be started or stopped later, without restarting `serve`, via t
 
 Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 
+- **Styling**: `static/ui.html` (the web UI) and `static/connect.html` (the QR landing page served by the git server at `/connect`) each copy the `:root` tokens of code-conductor's shell stylesheet (`public/styles.css` in code-conductor) into their inline `<style>`, because the host injects no theme into plugin iframes. Both pages are dark-only and share one identical `:root`. To restyle, re-copy the values from the host's `:root`.
+- **Buttons**: the accent-filled `primary` class is reserved for a form's submit action. Every other button is a quiet panel button, tinted with a modifier class where meaningful: `start` (green, starts or enables), `danger` (red, destructive or stop), `caution` (amber, rewrites local history). Plain, `secondary` and `copy-btn` buttons stay untinted.
+
 | Section | What it shows |
 |---------|--------------|
 | **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers). A **Start tunnel** / **Stop tunnel** button brings up (or tears down) a cloudflared tunnel while `serve` keeps running — no restart needed. Starting can take up to ~30s (the button shows a busy state); the Tunnel URL and `cs1:` string update live once it's up. A **Show QR** button renders the Connection string as a QR code (toggle to hide) so a phone on the same LAN can scan it instead of copy/pasting; disabled until a valid Connection string exists. |
@@ -211,6 +214,15 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 - `↓N behind` — peer has N commits you don't
 - `↕ diverged` — both ahead and behind
 - `sync failed` — the ↕ Sync attempt errored (e.g. a merge/rebase conflict); hover the badge for the full message, including any conflicting file list
+
+## Tests
+
+```sh
+npm test   # runs node --test, no extra dependencies
+```
+
+- `tests/frontend-styles.test.mjs` is the style guard. It pins `static/ui.html` and `static/connect.html` to: dark-only (`color-scheme: dark`, no `prefers-color-scheme`); code-conductor's shell token names declared on `:root`; every `var(--…)` used in CSS, inline styles and JS strings declared there; the host font on `:root`, with monospace only via the host's `ui-monospace` stack; none of the legacy GitHub-dark palette (the list lives in the test's `LEGACY_HEX`); and one identical `:root` across both pages.
+- It reads the HTML as text and does not render the pages.
 
 ## Connection string format
 
