@@ -5,15 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>code-share — connect</title>
 <style>
+  /* The host injects no theme into the page, so these values are copied
+     from the :root block of code-conductor's shell stylesheet (public/styles.css). */
+  :root {
+    --bg: #0f1117;
+    --panel: #151823;
+    --panel-2: #1d2130;
+    --text: #d8dae6;
+    --muted: #8a90a3;
+    --accent: #6ea8ff;
+    --green: #4ade80;
+    --amber: #f59e0b;
+    --red: #f87171;
+    --border: #232838;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    color-scheme: dark;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: monospace; background: #0d1117; color: #e6edf3; padding: 1.5rem; max-width: 600px; margin: 0 auto; }
-  h1 { color: #58a6ff; margin-bottom: 1rem; font-size: 1.3rem; }
-  p { color: #8b949e; margin-bottom: 1rem; line-height: 1.5; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
-  .cs { color: #e6edf3; word-break: break-all; font-size: 0.9rem; margin-bottom: 0.75rem; }
-  button { font-family: monospace; background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; }
-  button:hover { background: #30363d; }
-  .error { color: #f85149; }
+  body { background: var(--bg); color: var(--text); padding: 1.5rem; max-width: 600px; margin: 0 auto; }
+  h1 { color: var(--text); margin-bottom: 1rem; font-size: 1.3rem; }
+  p { color: var(--muted); margin-bottom: 1rem; line-height: 1.5; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+  .cs { color: var(--text); font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; margin-bottom: 0.75rem; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #262b3d; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .error { color: var(--red); }
 </style>
 </head>
 <body>
