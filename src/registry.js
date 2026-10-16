@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { SERVE_DIR, PROJECTS_ROOT, loadRegistry, saveRegistry } = require('./config');
 const { checkShareName, childPath } = require('./names');
+const { isStagingName } = require('./clone-staging');
 
 // The served link for a project, always directly inside SERVE_DIR.
 const servePath = (name) => childPath(SERVE_DIR, checkShareName(name) + '.git');
@@ -89,6 +90,7 @@ function scanProjectsRoot() {
   const entries = [];
   try {
     for (const entry of fs.readdirSync(PROJECTS_ROOT)) {
+      if (isStagingName(entry)) continue; // a clone in progress, not a project
       const fullPath = path.join(PROJECTS_ROOT, entry);
       try {
         if (fs.statSync(fullPath).isDirectory() && isGitRepo(fullPath)) {

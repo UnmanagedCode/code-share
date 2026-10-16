@@ -2,7 +2,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs';
+import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { eventually, request, require } from './_backend.mjs';
@@ -27,10 +28,15 @@ before(async () => {
   ({ server } = await startServer(0, 'tok', '127.0.0.1'));
   port = server.address().port;
 });
-after(() => new Promise((res) => server.close(res)));
-
 // git-upload-pack children of this process (the servers run in it), by exact process name.
 const gitChildren = () => execFileSync('sh', ['-c', `pgrep -a -P ${process.pid} -x git-upload-pack || true`], { encoding: 'utf8' }).trim();
+
+// Kills any git-upload-pack child left over: a reaping regression then fails its assertion instead of holding
+// this file's process (and the test run) open on the leaked child's pipes.
+after(() => {
+  execFileSync('sh', ['-c', `pkill -KILL -P ${process.pid} -x git-upload-pack || true`]);
+  return new Promise((res) => server.close(res));
+});
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Opens a raw connection, writes `text`, and resets it after `ms`. */
@@ -75,6 +81,8 @@ test('a reset in-flight git request is survived without a leaked child', async (
   }
   assert.ok(await eventually(() => gitChildren() === '', 5000), gitChildren());
   assert.ok(logged.some((l) => /client connection error on POST \/r\.git\/git-upload-pack/.test(l)), logged.join('\n'));
+  // A hang-up is the client's, logged once as such: never reported as a git failure.
+  assert.ok(logged.every((l) => /^Git server: client connection error on POST \/r\.git\/git-upload-pack: /.test(l)), logged.join('\n'));
   assert.equal(gitChildren(), '');
   assert.equal((await request(`http://127.0.0.1:${port}/connect`)).status !== 0, true);
   assert.equal((await request(`http://127.0.0.1:${port}/r.git/info/refs?service=git-upload-pack`, { headers: { authorization: AUTH } })).status, 200);
@@ -111,4 +119,42 @@ test('an aborted register body logs one line and no stack', async () => {
   assert.equal(logged.length, 1, logged.join('\n---\n'));
   assert.match(logged[0], /^Git server: client connection error on POST \/control\/register: aborted$/);
   assert.equal((await request(`http://127.0.0.1:${port}/connect`)).status !== 0, true);
+});
+
+// Invariant: when git-upload-pack cannot start (here: not on PATH; EMFILE and EAGAIN take the same path), both the ref
+// advertisement and the upload-pack POST are a 500 with one log line each, and the server keeps serving. The
+// positive control: with PATH restored, the same advertisement is a 200.
+test('git-upload-pack failing to start is a 500, and the server stays up', async () => {
+  const bin = mkdtempSync(path.join(os.tmpdir(), 'code-share-nogit-'));
+  symlinkSync(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+  const logged = [];
+  const error = console.error;
+  const PATH = process.env.PATH;
+  console.error = (...a) => logged.push(a.map((x) => (x instanceof Error ? x.stack : String(x))).join(' '));
+  process.env.PATH = bin;
+  let advert;
+  let pack;
+  try {
+    advert = await request(`http://127.0.0.1:${port}/r.git/info/refs?service=git-upload-pack`, { headers: { authorization: AUTH } });
+    pack = await request(`http://127.0.0.1:${port}/r.git/git-upload-pack`, {
+      method: 'POST',
+      headers: { authorization: AUTH, 'Content-Type': 'application/x-git-upload-pack-request' },
+      body: `0032want ${sha}\n00000009done\n`,
+    });
+  } finally {
+    process.env.PATH = PATH;
+    console.error = error;
+  }
+  assert.equal(advert.status, 500, advert.body);
+  assert.equal(advert.body, 'git failed on the server\n');
+  assert.equal(pack.status, 500, pack.body);
+  assert.deepEqual(logged.map((l) => l.split(':')[0] + ':' + l.split(':')[1]), [
+    'Git server: git-upload-pack --advertise-refs did not start',
+    'Git server: git-upload-pack failed',
+  ]);
+  assert.ok(logged.every((l) => /ENOENT/.test(l) && !/\n\s+at /.test(l)), logged.join('\n'));
+  assert.equal((await request(`http://127.0.0.1:${port}/connect`)).status !== 0, true);
+  const again = await request(`http://127.0.0.1:${port}/r.git/info/refs?service=git-upload-pack`, { headers: { authorization: AUTH } });
+  assert.equal(again.status, 200);
+  assert.match(again.body, new RegExp(`^001e# service=git-upload-pack\n0000[0-9a-f]{4}${sha} `));
 });

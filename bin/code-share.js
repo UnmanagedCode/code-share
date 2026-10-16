@@ -14,14 +14,17 @@ const { sync } = require('../src/sync');
 const { isServing } = require('../src/serve-state');
 const tunnelManager = require('../src/tunnel-manager');
 const { killAllGit } = require('../src/git');
+const { releaseAllStaging, sweepStaleStaging } = require('../src/clone-staging');
 
 // git commands run in their own process groups (src/git.js), which a signal to
-// this process does not reach: kill them first. `serve` then stops its tunnel and
+// this process does not reach: kill them first, then remove the staging
+// directories of clones they were making. `serve` then stops its tunnel and
 // exits 0; any other command dies by the signal, as without this handler.
 let onShutdown = null;
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     killAllGit();
+    releaseAllStaging();
     if (onShutdown) { onShutdown(); return; }
     process.removeAllListeners(signal);
     process.kill(process.pid, signal);
@@ -45,6 +48,7 @@ program
   .option('--mdns', 'advertise via mDNS')
   .option('--token <t>', 'override token')
   .action(async (opts) => {
+    for (const dir of sweepStaleStaging(PROJECTS_ROOT)) console.log(`Removed stale clone staging directory ${dir}`);
     const cfg = loadConfig();
     if (opts.port) cfg.port = opts.port;
     if (opts.uiPort) cfg.uiPort = opts.uiPort;

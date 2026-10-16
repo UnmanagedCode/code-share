@@ -6,6 +6,7 @@ const registry = require('./registry');
 const { isServing, isInternetUrl } = require('./serve-state');
 const { checkPeerName, checkPeerUrl } = require('./names');
 const { runGit } = require('./git');
+const staging = require('./clone-staging');
 const { peerRequest } = require('./peer-http');
 
 function authedUrl(base, token) {
@@ -37,17 +38,40 @@ function buildConnectionString(base, token) {
 // Git runs through runGit (src/git.js): argv only, with `--` before positional
 // arguments, so credential-bearing URLs, paths and peer-supplied names are
 // never parsed by a shell or read as options.
-// git clone creates the target before it reaches the peer, and a clone killed at
-// the deadline cleans nothing up; a leftover directory would block the name
-// for good. So a failed clone removes the target, but only one it created.
+const cloneError = (r) => new Error((r.stderr || '').trim() || `git clone failed with status ${r.code}`);
+
+// A new target is cloned into a staging directory beside it (src/clone-staging.js)
+// and moved into place only when complete: a failed, killed or concurrent clone
+// never leaves anything under the target's name, and never removes what another
+// clone put there. The name is claimed with mkdir, which fails if anything holds
+// it; rename then replaces that empty directory in one step.
+// An existing target (`clone --dir` an empty directory) is cloned into directly,
+// as git allows, and is never removed.
 async function cloneRepo(url, token, dir) {
   const cloneUrl = token ? authedUrl(url, token) : url;
   const target = path.resolve(dir || '.');
-  const existed = exists(target);
-  const r = await runGit(['clone', '--', cloneUrl, target]);
-  if (r.code !== 0) {
-    if (!existed && exists(target)) fs.rmSync(target, { recursive: true, force: true });
-    throw new Error((r.stderr || '').trim() || `git clone failed with status ${r.code}`);
+  if (exists(target)) {
+    const r = await runGit(['clone', '--', cloneUrl, target]);
+    if (r.code !== 0) throw cloneError(r);
+    return;
+  }
+  const stage = staging.stagingPathFor(target);
+  try {
+    const r = await runGit(['clone', '--', cloneUrl, stage]);
+    if (r.code !== 0) throw cloneError(r);
+    try {
+      fs.mkdirSync(target);
+    } catch (e) {
+      throw new Error(e.code === 'EEXIST' ? `Destination already exists: ${target}` : e.message);
+    }
+    try {
+      fs.renameSync(stage, target);
+    } catch (e) {
+      try { fs.rmdirSync(target); } catch { /* not ours to remove once it is not empty */ }
+      throw e;
+    }
+  } finally {
+    staging.releaseStaging(stage);
   }
 }
 

@@ -34,11 +34,31 @@ function subcommand(args) {
   return args[i] || 'command';
 }
 
-// The last `max` characters of `text + more`: git puts its error (and a conflict listing) at the end.
-const tail = (text, more, max) => {
-  const s = text + more;
-  return s.length > max ? s.slice(s.length - max) : s;
-};
+/**
+ * Keeps the last `max` characters of what is pushed: git puts its error (and a conflict listing) at the end.
+ * Linear in the input: chunks are kept as they come, whole chunks beyond the tail are dropped, and the text is
+ * joined once.
+ */
+function tailBuffer(max) {
+  let parts = [];
+  let head = 0; // parts before this index are dropped
+  let length = 0; // characters in parts[head..]
+  return {
+    push(chunk) {
+      parts.push(chunk);
+      length += chunk.length;
+      while (length - parts[head].length >= max) length -= parts[head++].length;
+      if (head > 1024 && head * 2 > parts.length) {
+        parts = parts.slice(head);
+        head = 0;
+      }
+    },
+    text() {
+      const s = parts.slice(head).join('');
+      return s.length > max ? s.slice(s.length - max) : s;
+    },
+  };
+}
 
 /**
  * Runs `git <args>` in `cwd`. Resolves `{stdout, stderr, code, timedOut}`; `code` is -1 when git could not
@@ -49,8 +69,8 @@ function runGit(args, { cwd, timeoutMs = LIMITS.GIT_TIMEOUT_MS } = {}) {
   const argv = ['-c', 'http.lowSpeedLimit=1', '-c', `http.lowSpeedTime=${LIMITS.GIT_STALL_SECONDS}`, ...args];
   const max = LIMITS.GIT_OUTPUT_MAX_CHARS;
   return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
+    const stdout = tailBuffer(max);
+    const stderr = tailBuffer(max);
     let timedOut = false;
     let child;
     try {
@@ -75,22 +95,25 @@ function runGit(args, { cwd, timeoutMs = LIMITS.GIT_TIMEOUT_MS } = {}) {
       live.delete(child.pid);
       resolve(result);
     };
-    const timedOutResult = () => ({ stdout, stderr: `git ${subcommand(args)} timed out after ${Math.round(timeoutMs / 1000)}s`, code: -1, timedOut: true });
+    const timedOutResult = () => ({ stdout: stdout.text(), stderr: `git ${subcommand(args)} timed out after ${Math.round(timeoutMs / 1000)}s`, code: -1, timedOut: true });
     const timer = setTimeout(() => {
+      // Once git has exited its pid may be reused: never signal a group that is no longer ours.
+      if (!live.has(child.pid)) return;
       timedOut = true;
       killGroup(child.pid);
       // Settle once git has exited (so nothing writes after the caller cleans up), or soon regardless.
       grace = setTimeout(() => settle(timedOutResult()), 2000);
     }, timeoutMs);
-    child.stdout.setEncoding('utf8').on('data', (d) => { stdout = tail(stdout, d, max); });
-    child.stderr.setEncoding('utf8').on('data', (d) => { stderr = tail(stderr, d, max); });
-    child.on('error', (e) => settle({ stdout, stderr: `Failed to run git: ${e.message}`, code: -1, timedOut: false }));
+    child.stdout.setEncoding('utf8').on('data', (d) => stdout.push(d));
+    child.stderr.setEncoding('utf8').on('data', (d) => stderr.push(d));
+    child.on('error', (e) => settle({ stdout: stdout.text(), stderr: `Failed to run git: ${e.message}`, code: -1, timedOut: false }));
     child.on('exit', () => {
       live.delete(child.pid);
+      clearTimeout(timer);
       if (timedOut) settle(timedOutResult());
     });
-    child.on('close', (code) => settle(timedOut ? timedOutResult() : { stdout, stderr, code: code ?? -1, timedOut: false }));
+    child.on('close', (code) => settle(timedOut ? timedOutResult() : { stdout: stdout.text(), stderr: stderr.text(), code: code ?? -1, timedOut: false }));
   });
 }
 
-module.exports = { runGit, killAllGit };
+module.exports = { runGit, killAllGit, tailBuffer };

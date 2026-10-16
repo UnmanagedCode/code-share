@@ -12,7 +12,8 @@ import { eventually, processesMatching, request, require } from './_backend.mjs'
 import { store } from './_isolatedData.mjs';
 
 const { LIMITS } = require('../src/limits');
-const { runGit } = require('../src/git');
+const { runGit, tailBuffer } = require('../src/git');
+const { STAGING_PREFIX } = require('../src/clone-staging');
 const { cloneRepo } = require('../src/peer');
 const { sync } = require('../src/sync');
 const { startWebUI } = require('../src/webui');
@@ -84,21 +85,24 @@ test('a stalled transfer fails on GIT_STALL_SECONDS, not the outer deadline', as
   }
 });
 
-// Invariant: a clone that fails (here, killed at the deadline) removes the directory git created, so a retry is not
-// refused as "already exists". The in-flight check shows git did create it.
+// Invariant: a clone killed at the deadline leaves nothing under the root, so a retry is not refused as "already
+// exists": git writes only into a staging directory (seen while it runs; the target name never appears), which is
+// removed when the clone fails.
 test('/api/clone: a timed-out clone leaves nothing behind and can be retried', async () => {
-  LIMITS.GIT_TIMEOUT_MS = 1500;
+  LIMITS.GIT_TIMEOUT_MS = 4000;
   store.config.peers = [{ name: 'slow', url: `http://127.0.0.1:${silentPort}/${unique('r1')}`, token: 't' }];
   const clone = () => request(`http://127.0.0.1:${ui.address().port}/api/clone`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ peer: 'slow', project: 'delta' }),
   });
+  const leftovers = () => readdirSync(ROOT).filter((n) => n === 'delta' || n.startsWith(STAGING_PREFIX));
   try {
     const pending = clone();
-    assert.ok(await eventually(() => existsSync(path.join(ROOT, 'delta')), 1400), 'git created the destination while cloning');
+    assert.ok(await eventually(() => readdirSync(ROOT).some((n) => n.startsWith(STAGING_PREFIX)), 3000), 'git is writing into a staging directory');
+    assert.equal(existsSync(path.join(ROOT, 'delta')), false, 'the target name is not used while cloning');
     for (const r of [await pending, await clone()]) {
       assert.equal(r.status, 500, r.body);
-      assert.match(JSON.parse(r.body).error, /^Clone failed: git clone timed out after 2s$/);
-      assert.deepEqual(readdirSync(ROOT).filter((n) => n === 'delta'), []);
+      assert.match(JSON.parse(r.body).error, /^Clone failed: git clone timed out after 4s$/);
+      assert.deepEqual(leftovers(), []);
     }
     assert.deepEqual(store.registry, []);
   } finally {
@@ -142,6 +146,26 @@ test('git output keeps only its tail', async () => {
   } finally {
     LIMITS.GIT_OUTPUT_MAX_CHARS = DEFAULTS.GIT_OUTPUT_MAX_CHARS;
   }
+});
+
+// Invariant: the output tail is linear in the output, however finely git chunks it (a peer can pace its sideband
+// in tiny pkt-lines): 4 MiB in 73-byte chunks into a 1 MiB tail is fast, and the tail is exact.
+test('the output tail is linear in tiny chunks', () => {
+  const max = 1024 * 1024;
+  const buf = tailBuffer(max);
+  const chunk = `${'x'.repeat(72)}\n`;
+  const t = Date.now();
+  for (let i = 0; i < (4 * 1024 * 1024) / chunk.length; i++) buf.push(chunk);
+  buf.push('fatal: the last line\n');
+  const text = buf.text();
+  const took = Date.now() - t;
+  assert.ok(took < 1500, `took ${took}ms`);
+  assert.equal(text.length, max);
+  assert.ok(text.endsWith(`${chunk}fatal: the last line\n`));
+  // Exactness at chunk boundaries, on a small cap.
+  const small = tailBuffer(10);
+  for (const c of ['abc', 'defg', 'hijkl', 'mn']) small.push(c);
+  assert.equal(small.text(), 'efghijklmn');
 });
 
 // Invariant: during sync, the peer's leader flag is read within LIMITS.LEADER_FLAG_TIMEOUT_MS (not the longer

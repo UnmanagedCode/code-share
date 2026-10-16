@@ -230,7 +230,7 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 
 ```sh
 npm install   # once: dev dependencies and the frontend/dist build the tests read
-npm test      # node --test (each test bounded by --test-timeout), then tsc -p frontend, then vitest
+npm test      # node --test (each test bounded by --test-timeout; --test-force-exit so a leaked child cannot hold the run open), then tsc -p frontend, then vitest
 ```
 
 | File | Guards |
@@ -244,10 +244,11 @@ npm test      # node --test (each test bounded by --test-timeout), then tsc -p f
 | `tests/traversal.test.mjs` | Peer-supplied names and URLs (`src/names.js`): unsafe clone names refused with nothing created, served links kept inside `data/serve`, peer names never reach a shell or a git option, peer URLs http(s) only, git routes single-segment only; argv-form `sync` still merges and aborts conflicts cleanly |
 | `tests/limits.test.mjs` | `LIMITS`: a stalled peer never blocks the servers and times out (git and HTTP), a flooding peer's reply is cut off, connect survives a stalled status, oversized bodies get 413 on both servers |
 | `tests/csrf.test.mjs` | The web UI's JSON gate: text/plain and bodiless POSTs get 415 with no side effect; JSON requests and the MCP bridge's requests still work |
-| `tests/gitserver-abort.test.mjs` | The git server survives a reset in-flight request without leaking `git-upload-pack` and logs an aborted body as one line, and answers a malformed request with 400 |
-| `tests/git-deadlines.test.mjs` | `runGit`: the deadline kills git's whole process group, `GIT_STALL_SECONDS` aborts a stalled transfer, output keeps its tail; a failed clone removes only what it created; the leader-flag lookup is bounded |
+| `tests/gitserver-abort.test.mjs` | The git server survives a reset in-flight request without leaking `git-upload-pack` and logs an aborted body as one line, answers a malformed request with 400, and answers 500 (staying up) when `git-upload-pack` cannot start |
+| `tests/git-deadlines.test.mjs` | `runGit`: the deadline kills git's whole process group, `GIT_STALL_SECONDS` aborts a stalled transfer, output keeps its tail, in linear time however finely it is chunked; a timed-out clone leaves nothing under the root; a failed clone never touches an existing target; the leader-flag lookup is bounded |
 | `tests/register-gate.test.mjs` | `/control/register` refuses browser-shaped requests (403) and non-JSON ones (415), and still accepts the released peer client |
-| `tests/serve-signal.test.mjs` | SIGTERM to `serve` (a copy of the backend in a temp dir) exits promptly and leaves no git process behind |
+| `tests/clone-staging.test.mjs` | Clones are staged (`src/clone-staging.js`): concurrent clones of one name give one repo and one clean refusal; a taken target is never touched; a failed clone leaves nothing; the startup sweep removes only stale staging directories; staging directories are never listed as projects |
+| `tests/serve-signal.test.mjs` | Run from a copy of the backend in a temp dir: SIGTERM to `serve` exits promptly and leaves no git process; SIGINT to `sync` and SIGTERM to `clone` kill their git and leave no staging directory; a normal exit with git running does the same; `serve` sweeps stale staging directories at start |
 | `tests/tunnel-check.test.mjs` | `ensureCloudflared` gives up after `CLOUDFLARED_CHECK_TIMEOUT_MS`, against fake `cloudflared` scripts only (no tunnel) |
 | `tests/noshell.test.mjs` | Git runs as `spawn('git', argv)` with no shell: a shell-active project name clones without side effect; unsafe branches are refused before any git runs |
 | `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, only `src/lib/api.ts` touches the network and every `api()` path is a literal `api/…`; each sweep is proven against a planted offender |
@@ -276,7 +277,7 @@ Both the web UI ("Your Link") and the CLI `status` command print the assembled s
 ```
 External HTTP server  0.0.0.0:<port>    ← auth (Basic x:<token>) + receive-pack block
   └─ /connect, /theme-init.js, /assets/*  ← connect page and only the files it loads (frontend/dist manifest), no auth
-  └─ /<name>.git/{info/refs,git-upload-pack,HEAD}  ← git.handle(req,res), node-git-server (single process, no proxy); any other path is a 404 (GIT_ROUTE_RE)
+  └─ /<name>.git/{info/refs,git-upload-pack,HEAD}  ← git.handle(req,res), node-git-server (single process, no proxy), except the upload-pack ref advertisement (serveAdvertisement); any other path is a 404 (GIT_ROUTE_RE)
   └─ /control/register POST             ← peer handshake (accepts projectLeaders map)
   └─ /control/status   GET             ← catalog for authed peers (exposes per-project leader boolean)
 
@@ -339,12 +340,12 @@ code-share can be installed as a code-conductor plugin via the `conductor.plugin
   - Any project name (CLI `share --as`, the web UI, the MCP `share` tool) must keep its `data/serve/<name>.git` link directly inside `data/serve` (`checkShareName`).
 - Nothing a peer or client does can stall or exhaust the servers. Every bound is named in `LIMITS` (`src/limits.js`):
   - git runs asynchronously, so a slow fetch or clone never blocks either server. A git command is killed, with its transport helpers, after `GIT_TIMEOUT_MS` (`git <command> timed out after <n>s`), and git itself aborts a transfer stalled for `GIT_STALL_SECONDS` (`Operation too slow`). Each output stream keeps its last `GIT_OUTPUT_MAX_CHARS`.
-  - a clone that fails for any reason removes the directory it created (never one that already existed), so the name can be retried.
-  - git commands still running when code-share exits (Ctrl-C, SIGTERM, or any exit) are killed with it.
+  - a clone is made in a staging directory beside its target (`STAGING_PREFIX`, `src/clone-staging.js`) and renamed into place only when complete; the name is claimed with `mkdir`, so of two concurrent clones of one name exactly one succeeds and the other is refused (`Destination already exists`). A failed or killed clone removes only its staging directory, never the target, so the name can be retried. Staging directories are never listed as projects; `serve` removes stale ones (their process gone) directly inside `PROJECTS_ROOT` at start, logging `Removed stale clone staging directory <path>`. A `clone --dir` into an existing empty directory clones into it directly, and a failure never removes it.
+  - git commands still running when code-share exits (Ctrl-C, SIGTERM, or any exit) are killed with it, and the clones they were staging are removed.
   - an HTTP call to a peer (register, status, peer-status) must finish within `PEER_HTTP_TIMEOUT_MS` (`Peer did not answer within <n>s`); the leader-flag lookup during sync within `LEADER_FLAG_TIMEOUT_MS`, after which sync uses the stored flag. A reply over `PEER_RESPONSE_MAX_BYTES` is cut off (`Peer reply larger than <n> bytes`).
   - a request body over `REQUEST_BODY_MAX_BYTES` gets a 413 on either server, and the connection is closed.
   - `cloudflared --version`, checked before a tunnel starts, must answer within `CLOUDFLARED_CHECK_TIMEOUT_MS`.
-  - the git server survives a client that aborts mid-request (one log line) or sends a malformed request (400), and ends the `git-upload-pack` it had started.
+  - the git server survives a client that aborts mid-request (one log line) or sends a malformed request (400), and ends the `git-upload-pack` it had started. When `git-upload-pack` cannot start (not on PATH, out of file descriptors or processes), the request is a 500 with one log line and the server stays up; the ref advertisement (`info/refs`) is sent only once `git-upload-pack` has started, so a client never mistakes that failure for an empty repository.
 - The web UI changes state only for a request that declares `Content-Type: application/json` (any request other than GET or HEAD, body or not); anything else gets a 415 `{"error": "Content-Type must be application/json"}`. A page on another site can send a text/plain or bodiless POST to `127.0.0.1` without a CORS preflight, but not a JSON one. code-conductor's MCP bridge sends `application/json`.
 - The git server's `/control/register` (token-authenticated) refuses a request carrying an `Origin` header, or a `Sec-Fetch-Site` other than `same-origin` or `none`, with a 403, and one without `Content-Type: application/json` with a 415. A browser that cached the token as a Basic credential for that origin could otherwise be made to register a peer from another site; code-share peers send JSON with neither header.
 - The `cs1:` connection string embeds the token — treat it like a password and share only over secure channels.

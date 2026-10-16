@@ -1,5 +1,8 @@
 'use strict';
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
 const { Git } = require('node-git-server');
 const { SERVE_DIR, loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
@@ -14,6 +17,42 @@ const CONNECT_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; co
 
 // The smart-HTTP routes node-git-server answers, for a single-segment repo name.
 const GIT_ROUTE_RE = /^\/[^/]+\.git\/(?:info\/refs|git-upload-pack|HEAD)$/;
+const INFO_REFS_RE = /^\/([^/]+\.git)\/info\/refs$/;
+
+// A git-protocol pkt-line: four hex digits of length (itself included), then the text.
+const pktLine = (s) => (4 + Buffer.byteLength(s)).toString(16).padStart(4, '0') + s;
+
+/** One log line for a failure on a git request; a 500 when nothing was sent yet, otherwise the response is cut off. */
+function failGitResponse(res, what, err) {
+  console.error(`Git server: ${what}: ${err && err.message}`);
+  if (!res.headersSent) {
+    res.writeHead(500, { 'Content-Type': 'text/plain' });
+    res.end('git failed on the server\n');
+  } else {
+    res.destroy();
+  }
+}
+
+/**
+ * The upload-pack ref advertisement (`GET /<repo>.git/info/refs?service=git-upload-pack`), as node-git-server
+ * sends it, except that nothing is written until git-upload-pack has started. node-git-server writes its 200 first,
+ * so a failed start reached the client as an empty advertisement, which git reads as an empty repository.
+ */
+function serveAdvertisement(repoDir, res) {
+  const child = spawn('git-upload-pack', ['--stateless-rpc', '--advertise-refs', repoDir], { stdio: ['ignore', 'pipe', 'ignore'] });
+  child.on('error', (e) => failGitResponse(res, 'git-upload-pack --advertise-refs did not start', e));
+  child.on('spawn', () => {
+    res.writeHead(200, {
+      'Content-Type': 'application/x-git-upload-pack-advertisement',
+      'Expires': 'Fri, 01 Jan 1980 00:00:00 GMT',
+      'Pragma': 'no-cache',
+      'Cache-Control': 'no-cache, max-age=0, must-revalidate',
+    });
+    res.write(pktLine('# service=git-upload-pack\n') + '0000');
+    child.stdout.pipe(res);
+  });
+  res.on('close', () => { if (child.exitCode === null) child.kill(); });
+}
 
 function parseBasicAuth(req) {
   const header = req.headers['authorization'];
@@ -166,11 +205,22 @@ function handleStatus(req, res) {
 async function startServer(port, token, host = '0.0.0.0') {
   const git = new Git(SERVE_DIR, { autoCreate: false });
 
+  // node-git-server emits a failure to start git (a missing binary, EMFILE, EAGAIN) as 'error' on the request's
+  // service object, or on this instance; unlistened, either would end the process. A service object also
+  // re-emits its request's errors: a client hanging up is already logged by absorbClientErrors.
+  git.on('error', (e) => console.error(`Git server: ${e.message}`));
+  const onServiceError = (service, what) => (e) => {
+    if (clientGone(service.req, service.res, e)) return;
+    failGitResponse(service.res, what, e);
+  };
+
   git.on('push', (push) => {
+    push.on('error', onServiceError(push, 'push failed'));
     push.reject(403, 'This server is read-only — pushing is not allowed');
   });
 
   git.on('fetch', (fetch) => {
+    fetch.on('error', onServiceError(fetch, 'git-upload-pack failed'));
     fetch.accept();
   });
 
@@ -239,6 +289,17 @@ async function startServer(port, token, host = '0.0.0.0') {
     if (!GIT_ROUTE_RE.test(staticFiles.pathOf(req.url))) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found\n');
+      return;
+    }
+    const info = req.method === 'GET' && INFO_REFS_RE.exec(staticFiles.pathOf(req.url));
+    if (info && new URLSearchParams(String(req.url).split('?')[1] || '').get('service') === 'git-upload-pack') {
+      const repoDir = path.join(SERVE_DIR, info[1]);
+      if (!fs.existsSync(repoDir)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('repository not found');
+        return;
+      }
+      serveAdvertisement(repoDir, res);
       return;
     }
     git.handle(req, res);
