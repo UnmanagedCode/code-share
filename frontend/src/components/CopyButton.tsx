@@ -5,15 +5,20 @@ import { copyText } from '@/lib/clipboard';
 
 const FEEDBACK_MS = { copied: 2000, failed: 5000 } as const;
 
-/** Copies `text`; on failure selects `target`'s text. The outcome shows on the button and is announced. */
+/**
+ * Copies `text`; on failure selects `target`'s text. The outcome shows on the button and is announced.
+ * `what` names the value for assistive tech when a page has several Copy buttons.
+ */
 export function CopyButton({
   text,
   target,
+  what,
   disabled,
   variant = 'ghost',
 }: {
   text: string;
   target: RefObject<HTMLElement | null>;
+  what?: string;
   disabled?: boolean;
   variant?: 'ghost' | 'outline';
 }) {
@@ -32,7 +37,14 @@ export function CopyButton({
   const label = outcome === 'copied' ? 'Copied' : outcome === 'failed' ? "Couldn't copy — text selected" : 'Copy';
   return (
     <>
-      <Button type="button" variant={variant} size="sm" disabled={disabled} onClick={onClick}>
+      <Button
+        type="button"
+        variant={variant}
+        size="sm"
+        disabled={disabled}
+        aria-label={what && !outcome ? `Copy ${what}` : undefined}
+        onClick={onClick}
+      >
         {outcome === 'copied' ? <CheckIcon /> : <CopyIcon />}
         {label}
       </Button>

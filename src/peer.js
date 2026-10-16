@@ -14,8 +14,9 @@ function authedUrl(base, token) {
 }
 
 // Build a cs1: connection string from a base URL + token (mirrors the web UI's
-// makeConnectionString in static/ui.html). Strips any embedded credentials and
-// base64url-encodes a {url, token} payload. Returns null if url is missing/invalid.
+// makeConnectionString in frontend/src/lib/connectionString.ts; both are pinned
+// to frontend/src/test/cs1-vector.json). Strips any embedded credentials and
+// base64url-encodes a {url, token} payload as UTF-8. Returns null if url is missing/invalid.
 function buildConnectionString(base, token) {
   if (!base) return null;
   try {

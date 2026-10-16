@@ -199,13 +199,15 @@ A tunnel can also be started or stopped later, without restarting `serve`, via t
 
 Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 
-- **Styling**: the connect page (the QR landing page served by the git server at `/connect`) is built from `frontend/connect.html` with React, Tailwind v4 and code-conductor's components. It loads no code-conductor host URL: it uses the bundled snapshot of code-conductor's palette (`frontend/src/cc-theme-fallback.css`) and follows the OS light/dark setting live. `static/ui.html` (the web UI) copies the `:root` tokens of code-conductor's shell stylesheet into its inline `<style>` and is dark-only.
-- **Buttons**: the accent-filled `primary` class is reserved for a form's submit action. Every other button is a quiet panel button, tinted with a modifier class where meaningful: `start` (green, starts or enables), `danger` (red, destructive or stop), `caution` (amber, rewrites local history). Plain, `secondary` and `copy-btn` buttons stay untinted.
+- **Styling**: the web UI (`frontend/index.html`) and the connect page (the QR landing page served by the git server at `/connect`, `frontend/connect.html`) are built with React, Tailwind v4 and code-conductor's components. Inside code-conductor the web UI follows its light/dark theme live through the host's `/pluginTheme.css`. Standalone, and always on the connect page (which loads no code-conductor host URL), both use the bundled snapshot of code-conductor's palette (`frontend/src/cc-theme-fallback.css`) and follow the OS light/dark setting live. Neither has a theme toggle of its own.
+- **Buttons** use code-conductor's variants: `default` (filled) only for **Connect**, the form's submit; `destructive` for **Stop tunnel** and the confirming **Unshare**; `outline` for Share, Unshare, Start tunnel, Show QR, Fetch, Sync and Clone; `ghost` for Copy and Cancel; `secondary` for Hide QR (the toggle's on state).
+- **Copy** is disabled while a value is `—`. Where the browser refuses the clipboard, it selects the text instead and says "Couldn't copy — text selected".
+- **Errors** show inline in their section, never as browser dialogs. A section whose data failed to load offers **Retry**; a failed 15 s refresh keeps the last data and says it couldn't refresh.
 
 | Section | What it shows |
 |---------|--------------|
 | **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers). A **Start tunnel** / **Stop tunnel** button brings up (or tears down) a cloudflared tunnel while `serve` keeps running — no restart needed. Starting can take up to ~30s (the button shows a busy state); the Tunnel URL and `cs1:` string update live once it's up. A **Show QR** button renders the Connection string as a QR code (toggle to hide) so a phone on the same LAN can scan it instead of copy/pasting; disabled until a valid Connection string exists. |
-| **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project Leader checkbox |
+| **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project Leader checkbox. **Unshare** asks inline ("Unshare <name>?", Cancel / Unshare; Esc cancels) |
 | **Connect a Peer** | Paste a peer's `cs1:` connection string + give the peer a local name |
 | **Connected Peers** | Per peer, for every project both sides share (live peer catalog ∩ local registry, independent of registry peer-wiring state): a **↻ Fetch button** (checks ahead/behind status only, no repo changes), a **↕ Sync button** (performs a real pull-only sync — fetch + merge/rebase, never pushes — then refreshes the badge), and an ahead/behind badge. A **Clone button** is shown instead for projects the peer exposes that you don't have locally |
 
@@ -214,7 +216,8 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 - `↑N ahead` — you have N commits the peer doesn't
 - `↓N behind` — peer has N commits you don't
 - `↕ diverged` — both ahead and behind
-- `sync failed` — the ↕ Sync attempt errored (e.g. a merge/rebase conflict); hover the badge for the full message, including any conflicting file list
+- `sync failed`, `err` (Fetch) or `clone failed` — the attempt errored (e.g. a merge/rebase conflict); open **Details** beside the badge for the full message, including any conflicting file list
+- A badge stays across the 15 s refresh until the next Fetch, Sync or Clone on that row.
 
 ## Tests
 
@@ -231,7 +234,8 @@ npm test      # node --test 'tests/*.test.mjs', then tsc -p frontend, then vites
 | `tests/dist.test.mjs` | The real build: servable file names, no inline script/style, relative URLs, head order, connect page loads only public files |
 | `tests/frontend-theme.test.mjs` | Theme wiring: the `@layer base` fallback, tokens only (no literal colours), no theme control besides `public/theme-init.js` |
 | `tests/connection-string.test.mjs` | `buildConnectionString` (`src/peer.js`) against the vector in `frontend/src/test/cs1-vector.json`, which the UI's tests share |
-| `frontend/src/**/*.test.{ts,tsx}` | Vitest (happy-dom): connection-string helpers, `api()`, `theme-init.js`, the connect page's states and copy fallback |
+| `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, every request path relative (`api/…`) |
+| `frontend/src/**/*.test.{ts,tsx}` | Vitest (happy-dom, `fetch` stubbed, no backend): every section's states and actions with their exact request bodies, polling, the QR matrix, hostile content rendered as text, the connect page, `theme-init.js` |
 
 - Tests never start a real tunnel: `tests/_backend.mjs` replaces `src/tunnel.js` before the backend loads.
 
