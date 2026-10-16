@@ -2,6 +2,7 @@
 // temp dir, and ./tunnel is a stub, so nothing a test does can open a real
 // tunnel (cloudflared may be on PATH).
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,4 +37,24 @@ export function fakeDist(files) {
     writeFileSync(p, text);
   }
   return dir;
+}
+
+/** Processes (pid and command line) whose command line contains `pattern`; pgrep runs without a shell, so it never matches itself. */
+export function processesMatching(pattern) {
+  try {
+    return execFileSync('pgrep', ['-af', pattern], { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Polls `check` every 50 ms until it returns truthy or `ms` pass; resolves its last value. */
+export async function eventually(check, ms = 5000) {
+  const end = Date.now() + ms;
+  let value = await check();
+  while (!value && Date.now() < end) {
+    await new Promise((r) => setTimeout(r, 50));
+    value = await check();
+  }
+  return value;
 }

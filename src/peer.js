@@ -1,4 +1,6 @@
 'use strict';
+const fs = require('fs');
+const path = require('path');
 const { loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
 const { isServing, isInternetUrl } = require('./serve-state');
@@ -35,12 +37,27 @@ function buildConnectionString(base, token) {
 // Git runs through runGit (src/git.js): argv only, with `--` before positional
 // arguments, so credential-bearing URLs, paths and peer-supplied names are
 // never parsed by a shell or read as options.
+// git clone creates the target before it reaches the peer, and a clone killed at
+// the deadline cleans nothing up; a leftover directory would block the name
+// for good. So a failed clone removes the target, but only one it created.
 async function cloneRepo(url, token, dir) {
   const cloneUrl = token ? authedUrl(url, token) : url;
-  const target = dir || '.';
+  const target = path.resolve(dir || '.');
+  const existed = exists(target);
   const r = await runGit(['clone', '--', cloneUrl, target]);
   if (r.code !== 0) {
+    if (!existed && exists(target)) fs.rmSync(target, { recursive: true, force: true });
     throw new Error((r.stderr || '').trim() || `git clone failed with status ${r.code}`);
+  }
+}
+
+// Whether anything (a dangling symlink included) is at `p`.
+function exists(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
   }
 }
 

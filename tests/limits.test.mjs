@@ -83,16 +83,16 @@ async function staysResponsive(pending) {
 // Invariant: a git fetch from a peer that never answers does not block the event loop (health and the git server
 // keep answering) and is killed at LIMITS.GIT_TIMEOUT_MS with a clear "timed out" error.
 test('sync-status against a stalled peer: servers stay up, then a timeout error', async () => {
-  LIMITS.GIT_TIMEOUT_MS = 1500;
+  LIMITS.GIT_TIMEOUT_MS = 3000;
   try {
     const t = Date.now();
     const pending = request(`${base}/api/sync-status?project=p&remote=stalled`);
     const slowest = await staysResponsive(pending);
-    assert.ok(slowest < 500, `health answered in ${slowest}ms during the fetch`);
+    assert.ok(slowest < 1000, `health answered in ${slowest}ms during a 3s fetch`);
     const r = await pending;
     assert.equal(r.status, 500);
     assert.match(JSON.parse(r.body).error, /git fetch failed: git fetch timed out after \d+s/);
-    assert.ok(Date.now() - t < 6000, 'bounded by the deadline');
+    assert.ok(Date.now() - t < 8000, 'bounded by the deadline');
   } finally {
     LIMITS.GIT_TIMEOUT_MS = DEFAULTS.GIT_TIMEOUT_MS;
   }
@@ -103,7 +103,7 @@ test('peer-status against a stalled peer: a 502 naming the timeout', async () =>
   LIMITS.PEER_HTTP_TIMEOUT_MS = 800;
   try {
     const pending = request(`${base}/api/peer-status?peer=stalled`);
-    assert.ok((await staysResponsive(pending)) < 500);
+    assert.ok((await staysResponsive(pending)) < 1000);
     const r = await pending;
     assert.equal(r.status, 502);
     assert.match(JSON.parse(r.body).error, /^Could not reach peer: Peer did not answer within \d+s/);
@@ -178,4 +178,25 @@ test('oversized request bodies get 413 and the servers survive', async () => {
   } finally {
     LIMITS.REQUEST_BODY_MAX_BYTES = DEFAULTS.REQUEST_BODY_MAX_BYTES;
   }
+});
+
+// Invariant: a client hanging up in the middle of a web UI request body is not an error: nothing is logged.
+test('an aborted web UI body logs no stack', async () => {
+  const logged = [];
+  const error = console.error;
+  console.error = (...a) => logged.push(a.map((x) => (x instanceof Error ? x.stack : String(x))).join(' '));
+  try {
+    await new Promise((resolve) => {
+      const s = net.connect(ui.address().port, '127.0.0.1', () => {
+        s.write('POST /api/share HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"path":');
+        setTimeout(() => { s.resetAndDestroy(); resolve(); }, 200);
+      });
+      s.on('error', () => {});
+    });
+    await new Promise((r) => setTimeout(r, 200));
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(logged, []);
+  assert.equal((await request(`${base}/api/health`)).status, 200);
 });

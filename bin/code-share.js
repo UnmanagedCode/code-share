@@ -13,6 +13,20 @@ const { cloneRepo, connectPeer, authedUrl, addRemote, buildConnectionString, wir
 const { sync } = require('../src/sync');
 const { isServing } = require('../src/serve-state');
 const tunnelManager = require('../src/tunnel-manager');
+const { killAllGit } = require('../src/git');
+
+// git commands run in their own process groups (src/git.js), which a signal to
+// this process does not reach: kill them first. `serve` then stops its tunnel and
+// exits 0; any other command dies by the signal, as without this handler.
+let onShutdown = null;
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    killAllGit();
+    if (onShutdown) { onShutdown(); return; }
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
+  });
+}
 
 const program = new Command();
 
@@ -105,8 +119,7 @@ program
     console.log(`Web UI: http://127.0.0.1:${effectiveUiPort}`);
     console.log('\nPress Ctrl+C to stop.');
 
-    process.on('SIGINT', () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); });
-    process.on('SIGTERM', () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); });
+    onShutdown = () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); };
   });
 
 // ─── share ────────────────────────────────────────────────────────────────────

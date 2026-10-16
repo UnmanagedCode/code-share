@@ -232,3 +232,17 @@ test('an unusable peer entry is skipped, not fatal, when sharing', async () => {
     store.config.peers = saved;
   }
 });
+
+// Invariant: only an unusable peer entry is skipped; a valid peer whose `git remote add` fails (here, the target is
+// not a git repository) surfaces git's error to the caller.
+test('a real git failure while wiring a valid peer is not skipped', async () => {
+  const notRepo = path.join(ROOT, 'not-a-repo');
+  mkdirSync(notRepo);
+  const saved = store.config.peers;
+  store.config.peers = [{ name: 'laptop', url: 'http://10.0.0.7:9419', token: 'b' }];
+  try {
+    await assert.rejects(peer.wireConnectedPeers('nr', notRepo), /not a git repository/);
+  } finally {
+    store.config.peers = saved;
+  }
+});

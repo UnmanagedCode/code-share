@@ -86,12 +86,13 @@ test('git runs as spawn("git", argv) with no shell', async () => {
   assert.deepEqual(fetches, [['fetch', '--', 'peer'], ['fetch', '--', 'peer', 'main']]);
 });
 
-// Invariant: a branch that is not one plain ref (shell syntax, an option, a refspec, a range) is refused at the
-// API boundary of POST /api/sync with a 400 (sync() refuses it too), and nothing runs.
+// Invariant: a branch that is not one plain ref (shell syntax, an option, a refspec, a range, a trailing `/`, `.`
+// or `.lock`) is refused at the API boundary of POST /api/sync with a 400 (sync() refuses it too), and nothing runs.
 test('POST /api/sync refuses an unsafe branch and runs nothing', async () => {
   const marker = path.join(CWD, 'pwned');
   spawned.length = 0;
-  for (const branch of [`$(touch ${marker})`, '`>pwned`', '-x', '--upload-pack=x', '+main:refs/heads/main', 'main:x', 'a..b', 'a b', 'a@{1}']) {
+  for (const branch of [`$(touch ${marker})`, '`>pwned`', '-x', '--upload-pack=x', '+main:refs/heads/main', 'main:x', 'a..b', 'a b', 'a@{1}',
+    'main/', 'v1.', 'main.lock']) {
     const r = await request(`${base}/api/sync`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ project: 'shelly', remote: 'peer', branch }) });
     assert.equal(r.status, 400, branch);
     assert.match(JSON.parse(r.body).error, /^Invalid branch/, branch);

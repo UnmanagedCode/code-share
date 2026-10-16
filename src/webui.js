@@ -11,7 +11,7 @@ const { handleMCP } = require('./mcp');
 const staticFiles = require('./static');
 const { checkProjectName, checkPeerName, checkBranch, childPath } = require('./names');
 const { peerRequest } = require('./peer-http');
-const { BodyError, readBody, isJson, refuse } = require('./http-body');
+const { BodyError, readBody, isJson, refuse, clientGone } = require('./http-body');
 
 // Sent on every response. No 'unsafe-inline' anywhere: the UI uses no component
 // that injects a <style>, and the QR code is inline SVG elements (no img-src).
@@ -295,6 +295,7 @@ async function handleRequest(req, res) {
       req.bodyText = await readBody(req);
     } catch (e) {
       if (e instanceof BodyError) { refuse(req, res, e.status, e.message); return; }
+      if (clientGone(req, res, e)) return; // the client hung up mid-body: nothing to answer
       throw e;
     }
   }

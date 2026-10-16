@@ -6,7 +6,7 @@ const registry = require('./registry');
 const { addRemote, authedUrl } = require('./peer');
 const { checkPeerName, checkPeerUrl } = require('./names');
 const staticFiles = require('./static');
-const { BodyError, readBody, refuse } = require('./http-body');
+const { BodyError, readBody, isJson, refuse, clientGone } = require('./http-body');
 
 // Sent on every response of this public (tunneled) origin. The connect page is
 // never framed and posts no form; it loads no fonts or images.
@@ -57,11 +57,23 @@ function absorbClientErrors(req, res) {
 
 // Control endpoint: peer registers itself with us
 async function handleRegister(req, res) {
+  // Real peers are Node clients, which send neither Origin nor Sec-Fetch-Site. A
+  // browser sends them, and may attach a Basic credential it cached for this
+  // origin, so a page elsewhere could otherwise register a peer here. Every
+  // code-share version sends application/json, which a simple cross-site
+  // request cannot.
+  const site = req.headers['sec-fetch-site'];
+  if (req.headers.origin !== undefined || (site !== undefined && site !== 'same-origin' && site !== 'none')) {
+    refuse(req, res, 403, 'Cross-site requests are not accepted');
+    return;
+  }
+  if (!isJson(req)) { refuse(req, res, 415, 'Content-Type must be application/json'); return; }
   let text;
   try {
     text = await readBody(req);
   } catch (e) {
     if (e instanceof BodyError) { refuse(req, res, e.status, e.message); return; }
+    if (clientGone(req, res, e)) return; // already logged once by absorbClientErrors
     throw e;
   }
   let body;

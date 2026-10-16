@@ -3,9 +3,7 @@ const { loadRegistry } = require('./config');
 const { checkPeerName, checkBranch } = require('./names');
 const { runGit } = require('./git');
 const { peerRequest } = require('./peer-http');
-
-// Sync falls back to the stored leader flag rather than wait long on a slow peer.
-const LEADER_FLAG_TIMEOUT_MS = 5000;
+const { LIMITS } = require('./limits');
 
 const git = (args, cwd) => runGit(args, { cwd });
 
@@ -23,7 +21,7 @@ async function fetchPeerLeaderFlag(proj, remoteName) {
   try {
     const data = await peerRequest(peerEntry.url.replace(/\/?$/, '') + '/control/status', {
       token: peerEntry.token,
-      timeoutMs: LEADER_FLAG_TIMEOUT_MS,
+      timeoutMs: LIMITS.LEADER_FLAG_TIMEOUT_MS,
     });
     const ps = ((data && data.shared) || []).find(s => s.name === proj.name);
     return typeof ps?.leader === 'boolean' ? ps.leader : stored;

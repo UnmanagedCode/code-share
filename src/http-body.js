@@ -34,6 +34,11 @@ function readBody(req, maxBytes = LIMITS.REQUEST_BODY_MAX_BYTES) {
   });
 }
 
+/** Whether a failed body read means the client went away (an abort or reset), which needs no stack trace. */
+function clientGone(req, res, err) {
+  return req.destroyed || res.destroyed || (err && (err.code === 'ECONNRESET' || err.code === 'ECONNABORTED' || err.message === 'aborted'));
+}
+
 /** Whether the request declares a JSON body: `application/json`, parameters (charset) allowed, any case. */
 function isJson(req) {
   const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -50,4 +55,4 @@ function refuse(req, res, status, error) {
   res.end(body, () => req.destroy());
 }
 
-module.exports = { BodyError, readBody, isJson, refuse };
+module.exports = { BodyError, readBody, isJson, refuse, clientGone };

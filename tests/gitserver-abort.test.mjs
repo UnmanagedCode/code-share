@@ -5,7 +5,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, symlinkSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { request, require } from './_backend.mjs';
+import { eventually, request, require } from './_backend.mjs';
 import { SERVE_DIR } from './_isolatedData.mjs';
 
 const { startServer } = require('../src/server');
@@ -52,9 +52,8 @@ test('the leak check sees a waiting git-upload-pack', async () => {
     assert.match(gitChildren(), /git-upload-pack --stateless-rpc/);
   } finally {
     child.kill('SIGKILL');
-    await wait(100);
   }
-  assert.equal(gitChildren(), '');
+  assert.ok(await eventually(() => gitChildren() === '', 3000), gitChildren());
 });
 
 // Invariant: resetting an authenticated upload-pack request mid-body (after git-upload-pack has started) is
@@ -71,10 +70,10 @@ test('a reset in-flight git request is survived without a leaked child', async (
         300,
       );
     }
-    await wait(300);
   } finally {
     console.error = error;
   }
+  assert.ok(await eventually(() => gitChildren() === '', 5000), gitChildren());
   assert.ok(logged.some((l) => /client connection error on POST \/r\.git\/git-upload-pack/.test(l)), logged.join('\n'));
   assert.equal(gitChildren(), '');
   assert.equal((await request(`http://127.0.0.1:${port}/connect`)).status !== 0, true);
@@ -91,5 +90,25 @@ test('a malformed request is a 400', async () => {
     s.on('error', () => resolve(data));
   });
   assert.match(reply, /^HTTP\/1\.1 400 Bad Request/);
+  assert.equal((await request(`http://127.0.0.1:${port}/connect`)).status !== 0, true);
+});
+
+// Invariant: a client hanging up in the middle of a /control/register body is one log line, never a stack trace.
+test('an aborted register body logs one line and no stack', async () => {
+  const logged = [];
+  const error = console.error;
+  console.error = (...a) => logged.push(a.map((x) => (x instanceof Error ? x.stack : String(x))).join(' '));
+  try {
+    await sendAndReset(
+      `POST /control/register HTTP/1.1\r\nHost: x\r\nAuthorization: ${AUTH}\r\nContent-Type: application/json\r\n` +
+      'Content-Length: 1000\r\n\r\n{"url":"http://h:1",',
+      200,
+    );
+    await wait(200);
+  } finally {
+    console.error = error;
+  }
+  assert.equal(logged.length, 1, logged.join('\n---\n'));
+  assert.match(logged[0], /^Git server: client connection error on POST \/control\/register: aborted$/);
   assert.equal((await request(`http://127.0.0.1:${port}/connect`)).status !== 0, true);
 });
