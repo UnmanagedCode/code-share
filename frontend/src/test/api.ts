@@ -13,6 +13,7 @@ export interface Call {
   url: string;
   body?: unknown;
   rawBody?: unknown;
+  headers: Headers;
 }
 
 /**
@@ -25,7 +26,7 @@ export function stubApi(routes: Record<string, unknown>) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     const rawBody = init?.body;
-    calls.push({ method, url, rawBody, body: typeof rawBody === 'string' ? JSON.parse(rawBody) : undefined });
+    calls.push({ method, url, rawBody, headers: new Headers(init?.headers), body: typeof rawBody === 'string' ? JSON.parse(rawBody) : undefined });
     const h = routes[`${method} ${url}`] ?? routes[`${method} ${url.split('?')[0]}`];
     if (h === undefined) return fail(404, `no stub for ${method} ${url}`);
     const v = typeof h === 'function' ? await (h as Handler)(url, init) : h;

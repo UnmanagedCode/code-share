@@ -83,7 +83,8 @@ test('/api/clone refuses unsafe names and creates nothing', async () => {
   assert.deepEqual(readdirSync(SERVE_DIR), []);
 });
 
-// Invariant: a normal name still clones into PROJECTS_ROOT, is registered, served from SERVE_DIR and wired to the peer.
+// Invariant: a normal name still clones from the peer into PROJECTS_ROOT, is registered and served from SERVE_DIR.
+// (The peer here is a file: URL, which is not a wirable peer URL, so its remote is skipped: see the C1 test.)
 test('/api/clone clones a normal name from a local bare repo', async () => {
   bareRepo('delta', 'README', 'delta\n');
   const r = await clone('delta');
@@ -92,7 +93,7 @@ test('/api/clone clones a normal name from a local bare repo', async () => {
   assert.ok(existsSync(path.join(dest, '.git')));
   assert.deepEqual(store.registry.map((p) => [p.name, p.path]), [['delta', dest]]);
   assert.equal(readlinkSync(path.join(SERVE_DIR, 'delta.git')), dest);
-  assert.match(git(dest, 'remote', 'get-url', 'peer'), /delta\.git/);
+  assert.equal(git(dest, 'remote', 'get-url', 'origin').trim(), pathToFileURL(path.join(PEER_DIR, 'delta.git')).href);
 });
 
 // Invariant: the registry's served link always lands directly inside SERVE_DIR, from any caller; a local name with
@@ -116,7 +117,7 @@ test('registry.addProject keeps the served link inside SERVE_DIR', () => {
 // refuses a bad name or a non-http(s) URL before any network call.
 test('addRemote and connectPeer refuse unsafe names and URLs', async () => {
   const repo = path.join(ROOT, 'delta');
-  for (const n of ['-x', '--mirror=push', 'x;y']) assert.throws(() => peer.addRemote(repo, n, 'http://h/x.git'), /Invalid peer name/, n);
+  for (const n of ['-x', '--mirror=push', 'x;y']) await assert.rejects(peer.addRemote(repo, n, 'http://h/x.git'), /Invalid peer name/, n);
   assert.doesNotMatch(git(repo, 'remote'), /mirror|-x/);
   await assert.rejects(peer.connectPeer('http://10.0.0.7:9419', 't', { name: '-x' }), /Invalid peer name/);
   await assert.rejects(peer.connectPeer('file:///etc', 't', { name: 'peer' }), /Invalid peer URL/);
@@ -126,7 +127,7 @@ test('addRemote and connectPeer refuse unsafe names and URLs', async () => {
 test('sync and getSyncState refuse unsafe remote names without running them', async () => {
   const marker = path.join(PARENT, `pwned-${process.pid}`);
   for (const remote of [`x"; touch ${marker}; "`, `--upload-pack=touch ${marker}`, `$(touch ${marker})`]) {
-    assert.throws(() => getSyncState('delta', { remote }), /Invalid peer name/, remote);
+    await assert.rejects(getSyncState('delta', { remote }), /Invalid peer name/, remote);
     await assert.rejects(sync('delta', { remote }), /Invalid peer name/, remote);
   }
   assert.equal(existsSync(marker), false);
@@ -138,14 +139,15 @@ test('sync in argv form: behind → merge → ahead; conflict aborts cleanly', a
   const dest = path.join(ROOT, 'delta');
   const upstream = path.join(PEER_DIR, 'delta.git');
   const work = mkdtempSync(path.join(os.tmpdir(), 'code-share-up-'));
+  git(dest, 'remote', 'add', 'peer', upstream);
   git(work, 'clone', '-q', upstream, '.');
   writeFileSync(path.join(work, 'NEW'), 'x\n');
   git(work, 'add', '.'); git(work, 'commit', '-qm', 'p1'); git(work, 'push', '-q', 'origin', 'HEAD');
-  assert.deepEqual(getSyncState('delta', { remote: 'peer' }), { project: 'delta', remote: 'peer', ahead: 0, behind: 1, state: 'remote-ahead' });
+  assert.deepEqual(await getSyncState('delta', { remote: 'peer' }), { project: 'delta', remote: 'peer', ahead: 0, behind: 1, state: 'remote-ahead' });
   const log = console.log; console.log = () => {};
   try {
     await sync('delta', { remote: 'peer' });
-    assert.equal(getSyncState('delta', { remote: 'peer' }).state, 'local-ahead');
+    assert.equal((await getSyncState('delta', { remote: 'peer' })).state, 'local-ahead');
     writeFileSync(path.join(work, 'README'), 'peer side\n');
     git(work, 'commit', '-qam', 'p2'); git(work, 'push', '-q', 'origin', 'HEAD');
     writeFileSync(path.join(dest, 'README'), 'local side\n');
@@ -199,5 +201,34 @@ test('git server serves single-segment repo paths only', async () => {
     }
   } finally {
     await new Promise((res) => server.close(res));
+  }
+});
+
+// Invariant: a stored peer entry that cannot be wired (a name outside PEER_NAME_RE, or a
+// non-http URL) is skipped with a logged error; sharing still succeeds and every valid peer is still wired.
+test('an unusable peer entry is skipped, not fatal, when sharing', async () => {
+  const repo = path.join(ROOT, 'c1');
+  mkdirSync(repo);
+  git(repo, 'init', '-q');
+  const saved = store.config.peers;
+  store.config.peers = [
+    { name: 'my laptop', url: 'http://10.0.0.8:9419', token: 'a' },
+    { name: 'laptop', url: 'http://10.0.0.7:9419', token: 'b' },
+    { name: 'files', url: 'file:///srv', token: 'c' },
+  ];
+  const logged = [];
+  const error = console.error;
+  console.error = (...a) => logged.push(a.join(' '));
+  try {
+    const r = await request(`${base}/api/share`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: repo, name: 'c1' }) });
+    assert.equal(r.status, 200, r.body);
+    assert.equal(git(repo, 'remote').trim(), 'laptop');
+    assert.equal(git(repo, 'remote', 'get-url', 'laptop').trim(), 'http://x:b@10.0.0.7:9419/c1.git');
+    assert.deepEqual(store.registry.find((p) => p.name === 'c1').peers.map((p) => p.name), ['laptop']);
+    assert.equal(logged.filter((l) => /^Skipping peer "my laptop" for c1: Invalid peer name/.test(l)).length, 1, logged.join('\n'));
+    assert.equal(logged.filter((l) => /^Skipping peer "files" for c1: Invalid peer URL/.test(l)).length, 1, logged.join('\n'));
+  } finally {
+    console.error = error;
+    store.config.peers = saved;
   }
 });

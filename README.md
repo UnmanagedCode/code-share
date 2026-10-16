@@ -173,7 +173,7 @@ git -C <repo> add <files> && git -C <repo> commit --no-edit
 | `list` | Show shared repos + URLs |
 | `clone <peer> <project> [--dir d]` | Clone a project from a connected peer (run `connect` first) |
 | `connect <cs1:string\|url> [--name n]` | Handshake both directions |
-| `sync [project] [--remote r] [--branch b] [--rebase]` | Pull-only sync |
+| `sync [project] [--remote r] [--branch b] [--rebase]` | Pull-only sync (`--branch`: one plain branch name, see Security notes) |
 | `status` | Show token, URLs, `cs1:` connection string, shared repos, peers |
 
 ### `connect` input formats
@@ -242,7 +242,11 @@ npm test      # node --test 'tests/*.test.mjs', then tsc -p frontend, then vites
 | `tests/frontend-theme.test.mjs` | Theme wiring: the `@layer base` fallback, tokens only (no literal colours), no theme control besides `public/theme-init.js` |
 | `tests/connection-string.test.mjs` | `buildConnectionString` (`src/peer.js`) against the vector in `frontend/src/test/cs1-vector.json`, which the UI's tests share |
 | `tests/traversal.test.mjs` | Peer-supplied names and URLs (`src/names.js`): unsafe clone names refused with nothing created, served links kept inside `data/serve`, peer names never reach a shell or a git option, peer URLs http(s) only, git routes single-segment only; argv-form `sync` still merges and aborts conflicts cleanly |
-| `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, every request path relative (`api/…`) |
+| `tests/limits.test.mjs` | `LIMITS`: a stalled peer never blocks the servers and times out (git and HTTP), a flooding peer's reply is cut off, connect survives a stalled status, oversized bodies get 413 on both servers |
+| `tests/csrf.test.mjs` | The web UI's JSON gate: text/plain and bodiless POSTs get 415 with no side effect; JSON requests and the MCP bridge's requests still work |
+| `tests/gitserver-abort.test.mjs` | The git server survives a reset in-flight request without leaking `git-upload-pack`, and answers a malformed request with 400 |
+| `tests/noshell.test.mjs` | Git runs as `spawn('git', argv)` with no shell: a shell-active project name clones without side effect; unsafe branches are refused before any git runs |
+| `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, only `src/lib/api.ts` touches the network and every `api()` path is a literal `api/…`; each sweep is proven against a planted offender |
 | `frontend/src/**/*.test.{ts,tsx}` | Vitest (happy-dom, `fetch` stubbed, no backend): every section's states and actions with their exact request bodies, polling, the QR matrix, hostile content rendered as text, the connect page, `theme-init.js` |
 
 - Tests never start a real tunnel: `tests/_backend.mjs` replaces `src/tunnel.js` before the backend loads, and points `PROJECTS_ROOT` at a temporary directory.
@@ -325,8 +329,16 @@ code-share can be installed as a code-conductor plugin via the `conductor.plugin
   - **Project names** from a peer's catalog (Clone) must be one plain path segment: no `/` or `\`, no leading `.` or `-`, no control characters (`checkProjectName`). The clone lands directly inside `PROJECTS_ROOT` (`childPath`). A refused name is a 400 shown as `clone failed`.
   - **Peer names** become git remote names, so they must match `PEER_NAME_RE`: letters, digits, `.`, `_`, `-`, starting with a letter or digit. This applies to `connect --name`, the web UI's peer name, and a peer registering itself.
   - **Peer URLs** must be `http:` or `https:` (`checkPeerUrl`).
-  - Every git command runs in argv form with `--` before positional arguments; nothing goes through a shell.
+  - **Branches** (`sync --branch`, `POST /api/sync`, the MCP `sync` tool) must be one plain branch name (`checkBranch`, `BRANCH_RE`): never an option, a refspec or a range.
+  - Every git command runs in argv form with `--` before positional arguments, through `runGit` in `src/git.js`; nothing goes through a shell.
+  - A stored peer entry that is not usable (a name outside `PEER_NAME_RE` or a non-http(s) URL) is ignored with a logged error when a project is shared or cloned; reconnect that peer under a valid name.
   - Any project name (CLI `share --as`, the web UI, the MCP `share` tool) must keep its `data/serve/<name>.git` link directly inside `data/serve` (`checkShareName`).
+- Nothing a peer or client does can stall or exhaust the servers. The bounds are named in `LIMITS` (`src/limits.js`):
+  - git runs asynchronously, so a slow fetch or clone never blocks either server; a git command is killed (with its transport helpers) after `GIT_TIMEOUT_MS`, and git itself aborts a transfer stalled for `GIT_STALL_SECONDS`. The error reads `git <command> timed out after <n>s`.
+  - every HTTP call to a peer (register, status, peer-status) must finish within `PEER_HTTP_TIMEOUT_MS` (`Peer did not answer within <n>s`), and a reply over `PEER_RESPONSE_MAX_BYTES` is cut off (`Peer reply larger than <n> bytes`).
+  - a request body over `REQUEST_BODY_MAX_BYTES` gets a 413 on either server, and the connection is closed.
+  - the git server survives a client that aborts mid-request or sends a malformed one (400), and ends the `git-upload-pack` it had started.
+- The web UI changes state only for a request that declares `Content-Type: application/json` (any request other than GET or HEAD, body or not); anything else gets a 415 `{"error": "Content-Type must be application/json"}`. A page on another site can send a text/plain or bodiless POST to `127.0.0.1` without a CORS preflight, but not a JSON one. code-conductor's MCP bridge sends `application/json`. The git server's token-authenticated `/control/register` is not gated.
 - The `cs1:` connection string embeds the token — treat it like a password and share only over secure channels.
 - cloudflared must be installed separately (see Prerequisites). The app does not download it.
 

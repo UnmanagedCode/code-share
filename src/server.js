@@ -6,6 +6,7 @@ const registry = require('./registry');
 const { addRemote, authedUrl } = require('./peer');
 const { checkPeerName, checkPeerUrl } = require('./names');
 const staticFiles = require('./static');
+const { BodyError, readBody, refuse } = require('./http-body');
 
 // Sent on every response of this public (tunneled) origin. The connect page is
 // never framed and posts no form; it loads no fonts or images.
@@ -29,20 +30,43 @@ function sendJSON(res, statusCode, obj) {
   res.end(body);
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
+// A client that aborts mid-request makes req (or res) emit 'error'.
+// node-git-server forwards req's errors to a per-request object that has no
+// 'error' listener, which would throw and end the process. Errors on these two
+// client streams still reach their listeners; a listener that rethrows is
+// caught here, and the response is closed. An errored stream never ends its
+// pipe, and node-git-server pipes req into git-upload-pack's stdin, so 'end'
+// is emitted on req too: the child reads EOF and exits instead of waiting forever.
+function absorbClientErrors(req, res) {
+  let absorbed = false;
+  for (const stream of [req, res]) {
+    const emit = stream.emit;
+    stream.emit = function (name, ...args) {
+      if (name !== 'error') return emit.call(this, name, ...args);
+      try { emit.call(this, name, ...args); } catch { /* an unlistened forward of the same error */ }
+      if (!absorbed) {
+        absorbed = true;
+        console.error(`Git server: client connection error on ${req.method} ${staticFiles.pathOf(req.url)}: ${args[0] && args[0].message}`);
+        if (!req.complete) req.emit('end');
+        res.destroy();
+      }
+      return true;
+    };
+  }
 }
 
 // Control endpoint: peer registers itself with us
 async function handleRegister(req, res) {
+  let text;
+  try {
+    text = await readBody(req);
+  } catch (e) {
+    if (e instanceof BodyError) { refuse(req, res, e.status, e.message); return; }
+    throw e;
+  }
   let body;
   try {
-    body = JSON.parse(await readBody(req));
+    body = JSON.parse(text);
   } catch {
     sendJSON(res, 400, { error: 'Invalid JSON body' });
     return;
@@ -79,7 +103,7 @@ async function handleRegister(req, res) {
   // and skipped instead of claiming a remote that isn't there.
   for (const proj of reg) {
     try {
-      addRemote(proj.path, peerName, authedUrl(peerUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken));
+      await addRemote(proj.path, peerName, authedUrl(peerUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken));
     } catch (e) {
       // NOTE: console.error is deliberate — on a server whose stdio is an
       // orphaned socketpair (dead parent), Node's Console drops the bytes on
@@ -142,6 +166,24 @@ async function startServer(port, token, host = '0.0.0.0') {
     // node-git-server's own writeHead merges these, so git responses carry them too.
     res.setHeader('Content-Security-Policy', CONNECT_CSP);
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    absorbClientErrors(req, res);
+    try {
+      await handleRequest(req, res);
+    } catch (e) {
+      console.error(`Git server request failed: ${req.method} ${staticFiles.pathOf(req.url)}:`, e);
+      if (res.headersSent) { res.destroy(); return; }
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal error\n');
+    }
+  });
+
+  // A malformed request never reaches the handler; answer 400 and close.
+  server.on('clientError', (err, socket) => {
+    if (socket.writable && !socket._httpMessage) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+    else socket.destroy();
+  });
+
+  async function handleRequest(req, res) {
 
     // Public connect landing page and the files it loads — deliberately
     // unauthenticated: the token lives only in the URL fragment (never sent to
@@ -188,7 +230,7 @@ async function startServer(port, token, host = '0.0.0.0') {
       return;
     }
     git.handle(req, res);
-  });
+  }
 
   await new Promise((resolve, reject) => {
     server.on('error', reject);

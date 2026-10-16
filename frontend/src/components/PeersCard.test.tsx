@@ -145,3 +145,28 @@ it('clones a peer-only project', async () => {
   await within(card()).findByRole('button', { name: 'Sync delta with laptop' });
   expect(within(card()).queryByRole('button', { name: 'Clone delta from laptop' })).toBeNull();
 });
+
+// Invariant: row state is keyed by the (peer, project) pair: with two peers sharing a project of the same name, a
+// Fetch or Sync result on one peer's row never shows on the other's.
+it('keeps badges apart for the same project under two peers', async () => {
+  const peers = [{ name: 'laptop', url: 'http://10.0.0.7:19419' }, { name: 'desktop', url: 'http://10.0.0.8:19419' }];
+  stubApi({
+    ...baseRoutes(makeStatus({ peers, shared: [entry('alpha', ['laptop', 'desktop'])] })),
+    'GET api/peer-status': { shared: [{ name: 'alpha' }] },
+    'GET api/sync-status': (url: string) => (url.endsWith('remote=laptop') ? { state: 'remote-ahead', ahead: 0, behind: 3 } : fail(500, 'desktop fetch failed')),
+    'POST api/sync': fail(500, 'desktop sync failed'),
+  });
+  const user = userEvent.setup();
+  render(<App />);
+  const item = (name: string) => within(card()).getByText(name, { exact: true }).closest('li')!;
+  await user.click(await within(card()).findByRole('button', { name: 'Fetch alpha from laptop' }));
+  await within(item('laptop')).findByText('↓3 behind');
+  expect(within(item('desktop')).queryByText('↓3 behind')).toBeNull();
+  expect(item('desktop').querySelector('[data-slot=badge][class*=destructive], details')).toBeNull();
+
+  await user.click(within(card()).getByRole('button', { name: 'Sync alpha with desktop' }));
+  await within(item('desktop')).findByText('sync failed');
+  expect(within(item('laptop')).queryByText('sync failed')).toBeNull();
+  expect(within(item('laptop')).getByText('↓3 behind')).toBeTruthy();
+  expect(within(item('desktop')).queryByText('↓3 behind')).toBeNull();
+});

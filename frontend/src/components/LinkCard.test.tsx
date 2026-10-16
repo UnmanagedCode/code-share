@@ -72,7 +72,8 @@ it('shows tunnelStarting as busy', async () => {
   expect(b.getAttribute('aria-disabled')).toBe('true');
 });
 
-// Invariant: Stop tunnel is destructive, posts with no body, and reads "Stopping…" (aria-disabled) while in flight.
+// Invariant: Stop tunnel is destructive, posts with no body but a JSON content type, and reads "Stopping…"
+// (aria-disabled) while in flight.
 it('stops a tunnel', async () => {
   const stop = deferred();
   const api = stubApi({ ...baseRoutes(makeStatus({ tunnelUrl: TUNNEL })), 'POST api/tunnel/stop': () => stop.promise });
@@ -82,7 +83,9 @@ it('stops a tunnel', async () => {
   expect(b.className).toContain('bg-destructive');
   await user.click(b);
   expect(button('Stopping…').getAttribute('aria-disabled')).toBe('true');
-  expect(api.calls.find((c) => c.url === 'api/tunnel/stop')?.rawBody).toBeUndefined();
+  const stopCall = api.calls.find((c) => c.url === 'api/tunnel/stop')!;
+  expect(stopCall.rawBody).toBeUndefined();
+  expect(stopCall.headers.get('Content-Type')).toBe('application/json');
   api.routes['GET api/status'] = makeStatus();
   await act(async () => stop.resolve({ ok: true }));
   await within(card()).findByRole('button', { name: 'Start tunnel' });

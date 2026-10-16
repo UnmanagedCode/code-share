@@ -31,6 +31,20 @@ function checkPeerName(name) {
   return name;
 }
 
+// A branch to fetch: git check-ref-format's rules, conservatively. Letters, digits, `.`, `_`, `-`, `/`;
+// no leading `-` or `.`, no `..`, `//`, `/.`, trailing `/`, `.` or `.lock`. No `:`, `+`, `@{`, whitespace or
+// control characters, so it is always one plain ref and never a refspec.
+const BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/;
+
+/** A branch name for `sync --branch` / `POST /api/sync`: one plain ref (see BRANCH_RE). */
+function checkBranch(branch) {
+  if (typeof branch !== 'string' || !BRANCH_RE.test(branch) || branch.includes('..') || branch.includes('//')
+    || branch.includes('/.') || /(\/|\.|\.lock)$/.test(branch)) {
+    throw new Error(`Invalid branch: ${JSON.stringify(branch)} (one plain branch name: letters, digits, ".", "_", "-", "/")`);
+  }
+  return branch;
+}
+
 /** A peer base URL: http or https only, so git never sees a file:, ext:: or other transport from a peer. */
 function checkPeerUrl(url) {
   let u;
@@ -62,4 +76,4 @@ function childPath(root, name) {
   return dest;
 }
 
-module.exports = { checkProjectName, checkShareName, checkPeerName, checkPeerUrl, childPath, PEER_NAME_RE };
+module.exports = { checkProjectName, checkShareName, checkPeerName, checkPeerUrl, checkBranch, childPath, PEER_NAME_RE, BRANCH_RE };

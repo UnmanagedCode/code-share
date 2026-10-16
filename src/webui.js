@@ -1,6 +1,5 @@
 'use strict';
 const http = require('http');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { loadConfig, saveConfig, loadRegistry, PROJECTS_ROOT } = require('./config');
@@ -10,48 +9,16 @@ const { sync, getSyncState } = require('./sync');
 const tunnelManager = require('./tunnel-manager');
 const { handleMCP } = require('./mcp');
 const staticFiles = require('./static');
-const { checkProjectName, childPath } = require('./names');
+const { checkProjectName, checkPeerName, checkBranch, childPath } = require('./names');
+const { peerRequest } = require('./peer-http');
+const { BodyError, readBody, isJson, refuse } = require('./http-body');
 
 // Sent on every response. No 'unsafe-inline' anywhere: the UI uses no component
 // that injects a <style>, and the QR code is inline SVG elements (no img-src).
 const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
 
-// Authenticated GET to a peer's control endpoint
-function fetchJSON(url, token) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (u.protocol === 'https:' ? 443 : 80),
-      path: u.pathname + (u.search || ''),
-      method: 'GET',
-      headers: {
-        'Authorization': `Basic ${Buffer.from(`x:${token}`).toString('base64')}`
-      }
-    };
-    const mod = u.protocol === 'https:' ? https : http;
-    const req = mod.request(opts, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        if (res.statusCode >= 400) { reject(new Error(`HTTP ${res.statusCode}: ${text.trim()}`)); return; }
-        try { resolve(JSON.parse(text)); } catch { resolve(text); }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
+// The body handleRequest read up front (every non-GET/HEAD request, JSON-typed and capped).
+const requestBody = async (req) => req.bodyText;
 
 function sendJSON(res, code, obj) {
   const body = JSON.stringify(obj, null, 2);
@@ -65,12 +32,12 @@ function sendJSON(res, code, obj) {
 // catalog ∩ local registry), which may include projects whose peer remote was
 // never wired (e.g. shared before the wiring fix). Idempotent. Shared by both
 // /api/sync-status and /api/sync so the two routes can't drift out of step.
-function selfHealPeerRemote(projectName, remoteName) {
+async function selfHealPeerRemote(projectName, remoteName) {
   const proj = registry.findProject(projectName);
   if (!proj) return;
   const pr = (loadConfig().peers || []).find(p => p.name === remoteName);
   if (!pr) return;
-  try { peer.wirePeerRemote(projectName, proj.path, pr); } catch {}
+  try { await peer.wirePeerRemote(projectName, proj.path, pr); } catch {}
 }
 
 async function handleAPI(req, res) {
@@ -86,7 +53,7 @@ async function handleAPI(req, res) {
   }
 
   if (req.method === 'POST' && pathname === '/api/mcp') {
-    await handleMCP(req, res, readBody, sendJSON);
+    await handleMCP(req, res, requestBody, sendJSON);
     return true;
   }
 
@@ -112,7 +79,7 @@ async function handleAPI(req, res) {
   // Start a tunnel while serve is already running (default: cloudflared)
   if (req.method === 'POST' && pathname === '/api/tunnel/start') {
     let body;
-    try { body = JSON.parse(await readBody(req)); } catch {
+    try { body = JSON.parse(await requestBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
@@ -140,7 +107,7 @@ async function handleAPI(req, res) {
 
   if (req.method === 'POST' && pathname === '/api/share') {
     let body;
-    try { body = JSON.parse(await readBody(req)); } catch {
+    try { body = JSON.parse(await requestBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
@@ -150,7 +117,7 @@ async function handleAPI(req, res) {
       // Wire the peer git remote + registry peer entry for every connected peer,
       // mirroring the CLI `share` — otherwise a UI-shared project gets peers:[]
       // and never renders a Sync button (and has no `peer` remote to sync against).
-      peer.wireConnectedPeers(name, entry.path);
+      await peer.wireConnectedPeers(name, entry.path);
       sendJSON(res, 200, { ok: true, entry });
     } catch (e) {
       sendJSON(res, 400, { error: e.message });
@@ -163,7 +130,7 @@ async function handleAPI(req, res) {
   // but lands in PROJECTS_ROOT and registers, which the bare CLI clone does not).
   if (req.method === 'POST' && pathname === '/api/clone') {
     let body;
-    try { body = JSON.parse(await readBody(req)); } catch {
+    try { body = JSON.parse(await requestBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
@@ -187,14 +154,14 @@ async function handleAPI(req, res) {
     if (registry.findProject(project)) { sendJSON(res, 400, { error: `Name already in use: ${project}` }); return true; }
     try {
       const projUrl = peerInfo.url.replace(/\/?$/, '') + '/' + project + '.git';
-      peer.cloneRepo(projUrl, peerInfo.token, dest);
+      await peer.cloneRepo(projUrl, peerInfo.token, dest);
     } catch (e) {
       sendJSON(res, 500, { error: `Clone failed: ${e.message}` });
       return true;
     }
     try {
       const entry = registry.addProject(dest, project);
-      peer.wireConnectedPeers(project, entry.path);
+      await peer.wireConnectedPeers(project, entry.path);
       sendJSON(res, 200, { ok: true, entry });
     } catch (e) {
       sendJSON(res, 500, { error: `Cloned to ${dest} but registration failed: ${e.message}` });
@@ -204,7 +171,7 @@ async function handleAPI(req, res) {
 
   if (req.method === 'POST' && pathname === '/api/unshare') {
     let body;
-    try { body = JSON.parse(await readBody(req)); } catch {
+    try { body = JSON.parse(await requestBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
@@ -219,7 +186,7 @@ async function handleAPI(req, res) {
 
   if (req.method === 'POST' && pathname === '/api/connect') {
     let body;
-    try { body = JSON.parse(await readBody(req)); } catch {
+    try { body = JSON.parse(await requestBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
@@ -237,7 +204,7 @@ async function handleAPI(req, res) {
   // Set per-project leader flag
   if (req.method === 'POST' && pathname === '/api/project-leader') {
     let body;
-    try { body = JSON.parse(await readBody(req)); } catch {
+    try { body = JSON.parse(await requestBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
@@ -261,7 +228,7 @@ async function handleAPI(req, res) {
     if (!peerInfo) { sendJSON(res, 404, { error: `Peer not found: ${peerName}` }); return true; }
     try {
       const statusUrl = peerInfo.url.replace(/\/?$/, '') + '/control/status';
-      const peerStatus = await fetchJSON(statusUrl, peerInfo.token);
+      const peerStatus = await peerRequest(statusUrl, { token: peerInfo.token });
       sendJSON(res, 200, peerStatus);
     } catch (e) {
       sendJSON(res, 502, { error: `Could not reach peer: ${e.message}` });
@@ -275,8 +242,8 @@ async function handleAPI(req, res) {
     const remoteName  = url.searchParams.get('remote') || 'peer';
     if (!projectName) { sendJSON(res, 400, { error: 'project query param is required' }); return true; }
     try {
-      selfHealPeerRemote(projectName, remoteName);
-      const state = getSyncState(projectName, { remote: remoteName });
+      await selfHealPeerRemote(projectName, remoteName);
+      const state = await getSyncState(projectName, { remote: remoteName });
       sendJSON(res, 200, state);
     } catch (e) {
       sendJSON(res, 500, { error: e.message });
@@ -289,16 +256,24 @@ async function handleAPI(req, res) {
   // the MCP bridge's `sync` tool (src/mcp.js) and the CLI `sync` command.
   if (req.method === 'POST' && pathname === '/api/sync') {
     let body;
-    try { body = JSON.parse(await readBody(req)); } catch {
+    try { body = JSON.parse(await requestBody(req)); } catch {
       sendJSON(res, 400, { error: 'Invalid JSON' });
       return true;
     }
     const { project, remote = 'peer', branch, useRebase = false } = body;
     if (!project) { sendJSON(res, 400, { error: 'project is required' }); return true; }
+    // sync() refuses these too; checking first means a bad value runs no git at all.
     try {
-      selfHealPeerRemote(project, remote);
+      checkPeerName(remote);
+      if (branch) checkBranch(branch);
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+      return true;
+    }
+    try {
+      await selfHealPeerRemote(project, remote);
       const outcome = await sync(project, { remote, branch, useRebase: !!useRebase });
-      const state = getSyncState(outcome.project, { remote });
+      const state = await getSyncState(outcome.project, { remote });
       sendJSON(res, 200, { ok: true, ...state });
     } catch (e) {
       sendJSON(res, 500, { error: e.message });
@@ -310,6 +285,20 @@ async function handleAPI(req, res) {
 }
 
 async function handleRequest(req, res) {
+  // Every request that can change state must say it is JSON. A page on another
+  // origin can POST text/plain (or nothing) here without a CORS preflight, but
+  // not application/json, so this refuses cross-site requests. code-conductor's
+  // MCP bridge sends application/json to /api/mcp.
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    if (!isJson(req)) { refuse(req, res, 415, 'Content-Type must be application/json'); return; }
+    try {
+      req.bodyText = await readBody(req);
+    } catch (e) {
+      if (e instanceof BodyError) { refuse(req, res, e.status, e.message); return; }
+      throw e;
+    }
+  }
+
   // JSON API
   if (req.url && req.url.startsWith('/api/')) {
     const handled = await handleAPI(req, res);

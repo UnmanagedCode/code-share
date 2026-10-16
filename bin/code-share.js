@@ -137,7 +137,7 @@ program
       // Wire the peer git remote for every already-connected peer, mirroring the
       // handleRegister principle: wire wherever a (project, peer) pair becomes known.
       // Idempotent (addRemote does add → set-url). sync fetches the live leader flag.
-      for (const w of wireConnectedPeers(name, entry.path)) {
+      for (const w of await wireConnectedPeers(name, entry.path)) {
         console.log(`  Wired peer remote: ${w.name} → ${w.url}`);
       }
     } catch (e) {
@@ -190,7 +190,7 @@ program
   .command('clone <peer> <project>')
   .description('Clone a project from a connected peer (run `connect` first)')
   .option('--dir <path>', 'destination directory (default: ./<project>)')
-  .action((peerName, project, opts) => {
+  .action(async (peerName, project, opts) => {
     const cfg = loadConfig();
     const peer = (cfg.peers || []).find(p => p.name === peerName);
     if (!peer) {
@@ -199,7 +199,7 @@ program
     }
     try {
       const projUrl = peer.url.replace(/\/?$/, '') + '/' + project + '.git';
-      cloneRepo(projUrl, peer.token, opts.dir || project);
+      await cloneRepo(projUrl, peer.token, opts.dir || project);
     } catch (e) {
       console.error('Clone failed:', e.message);
       process.exit(1);

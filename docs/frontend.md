@@ -24,7 +24,7 @@ frontend/
     index.css  cc-theme-fallback.css
     components/                     the sections and shared pieces
       ui/                           copied from code-conductor's web/src/components/ui
-    lib/                            api, connection strings, polling, peer rows, theme, clipboard
+    lib/                            api, connection strings, polling, peer rows, clipboard
     test/                           vitest setup, fetch stub, the shared cs1 vector
 ```
 
@@ -59,7 +59,6 @@ frontend/
 | `src/index.css` | Tailwind, `tw-animate-css`, the fallback, `@custom-variant dark`, and the `@theme inline` token map (code-conductor's reference block, kept verbatim) |
 | `src/cc-theme-fallback.css` | A one-time snapshot of code-conductor's `web/src/themeTokens.css` wrapped in `@layer base`. Embedded, the host's unlayered `/pluginTheme.css` wins; standalone, this is the palette. Never update it to track code-conductor |
 | `public/theme-init.js` | Standalone only: toggles `.dark` from `prefers-color-scheme`, live. Embedded, the bridge has set `data-cc-theme` and owns `.dark`, so it does nothing |
-| `src/lib/theme.ts` | `useTheme()` / `isEmbedded()`, for code that must react to the theme |
 
 - `index.html` loads, in order: `/pluginBridge.js` (blocking), `/pluginTheme.css`, `theme-init.js`, the module.
 - No theme toggle of the page's own: inside code-conductor the page follows the host.
@@ -71,7 +70,8 @@ frontend/
 - Neither allows `'unsafe-inline'` styles. So the UI uses no component that injects a `<style>` element: no Radix Dialog, Sheet, Select, ScrollArea or DropdownMenu, and no sonner toasts. Confirmation is inline (Unshare), and feedback is inline text or an `Alert`. React and Radix set `style` through the CSSOM, which the CSP does not block.
 - There is no `img-src`: the QR code is SVG elements.
 - Content from the backend or a peer (names, paths, URLs, error messages) is always JSX text. The UI renders no link built from content, so there is no `safeHref`. Adding one requires the scheme allowlist from code-conductor's `docs/plugin-ui.md`, Part 2.
-- Every request path is relative (`api/…`): inside code-conductor a root-relative `/api/…` would reach code-conductor's API. `api()` in `src/lib/api.ts` refuses a `/`-led path.
+- Every request goes through `api()` in `src/lib/api.ts`, the only module that touches the network, with a relative path (`api/…`): inside code-conductor a root-relative `/api/…` would reach code-conductor's API, so `api()` refuses a `/`-led path.
+- `api()` sends `Content-Type: application/json` on every request other than GET/HEAD, body or not: the backend refuses a state-changing request without it (see the README's Security notes).
 
 ## Interaction rules
 
