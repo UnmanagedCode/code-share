@@ -6,7 +6,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.PROJECTS_ROOT = mkdtempSync(path.join(os.tmpdir(), 'code-share-test-'));
+// Inside a private parent, so a test can check that nothing appears beside the root either.
+process.env.PROJECTS_ROOT = path.join(mkdtempSync(path.join(os.tmpdir(), 'code-share-test-')), 'root');
+mkdirSync(process.env.PROJECTS_ROOT);
 
 export const require = createRequire(import.meta.url);
 

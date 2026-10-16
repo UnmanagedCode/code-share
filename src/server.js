@@ -4,11 +4,15 @@ const { Git } = require('node-git-server');
 const { SERVE_DIR, loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
 const { addRemote, authedUrl } = require('./peer');
+const { checkPeerName, checkPeerUrl } = require('./names');
 const staticFiles = require('./static');
 
 // Sent on every response of this public (tunneled) origin. The connect page is
 // never framed and posts no form; it loads no fonts or images.
 const CONNECT_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+// The smart-HTTP routes node-git-server answers, for a single-segment repo name.
+const GIT_ROUTE_RE = /^\/[^/]+\.git\/(?:info\/refs|git-upload-pack|HEAD)$/;
 
 function parseBasicAuth(req) {
   const header = req.headers['authorization'];
@@ -50,13 +54,15 @@ async function handleRegister(req, res) {
     return;
   }
 
-  // Reject a malformed peer URL before the loop: authedUrl() calls new URL() and
-  // would throw TypeError per project, silently skipping every project while the
-  // register still returns 200 { ok: true }.
+  // The name becomes a git remote name and the URL a git remote URL on every
+  // shared project, so both are checked before anything is written. A malformed
+  // URL would also make authedUrl() throw per project, silently skipping every
+  // project while the register still returned 200 { ok: true }.
   try {
-    new URL(peerUrl);
-  } catch {
-    sendJSON(res, 400, { error: `Invalid peer URL: ${peerUrl}` });
+    checkPeerName(peerName);
+    checkPeerUrl(peerUrl);
+  } catch (e) {
+    sendJSON(res, 400, { error: e.message });
     return;
   }
 
@@ -173,7 +179,14 @@ async function startServer(port, token, host = '0.0.0.0') {
       return;
     }
 
-    // Route git requests via git.handle()
+    // Route git requests via git.handle(). A repo URL is /<name>.git/…, one
+    // segment naming a served link in SERVE_DIR; node-git-server would also
+    // accept a deeper path, reaching a nested repo inside a shared project.
+    if (!GIT_ROUTE_RE.test(staticFiles.pathOf(req.url))) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found\n');
+      return;
+    }
     git.handle(req, res);
   });
 

@@ -184,6 +184,8 @@ git -C <repo> add <files> && git -C <repo> commit --no-edit
 | Plain URL with embedded credentials | `connect http://x:token@host:9419` |
 | Plain URL + `--token` flag | `connect http://host:9419 --token abc123` |
 
+The URL must be `http:` or `https:`, and `--name` must match `PEER_NAME_RE` in `src/names.js` (letters, digits, `.`, `_`, `-`, starting with a letter or digit); otherwise `connect` stops with `Invalid peer URL` or `Invalid peer name`.
+
 ### `serve` options
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -199,17 +201,19 @@ A tunnel can also be started or stopped later, without restarting `serve`, via t
 
 Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 
-- **Styling**: the web UI (`frontend/index.html`) and the connect page (the QR landing page served by the git server at `/connect`, `frontend/connect.html`) are built with React, Tailwind v4 and code-conductor's components. Inside code-conductor the web UI follows its light/dark theme live through the host's `/pluginTheme.css`. Standalone, and always on the connect page (which loads no code-conductor host URL), both use the bundled snapshot of code-conductor's palette (`frontend/src/cc-theme-fallback.css`) and follow the OS light/dark setting live. Neither has a theme toggle of its own.
+- **Build and design**: the web UI and the connect page (the QR landing page the git server serves at `/connect`) are built from `frontend/` with React, Tailwind v4 and code-conductor's components. See [docs/frontend.md](docs/frontend.md) for the stack, the build, serving, CSP and the interaction rules.
+- **Theme**: inside code-conductor the web UI follows its light/dark theme live (the host's `/pluginTheme.css`, with its Geist fonts). Standalone, and always on the connect page, the pages use a bundled snapshot of code-conductor's palette, follow the OS light/dark setting live, and use the system font. There is no theme toggle of the plugin's own.
 - **Buttons** use code-conductor's variants: `default` (filled) only for **Connect**, the form's submit; `destructive` for **Stop tunnel** and the confirming **Unshare**; `outline` for Share, Unshare, Start tunnel, Show QR, Fetch, Sync and Clone; `ghost` for Copy and Cancel; `secondary` for Hide QR (the toggle's on state).
 - **Copy** is disabled while a value is `—`. Where the browser refuses the clipboard, it selects the text instead and says "Couldn't copy — text selected".
 - **Errors** show inline in their section, never as browser dialogs. A section whose data failed to load offers **Retry**; a failed 15 s refresh keeps the last data and says it couldn't refresh.
+- **Keyboard**: every control is reachable with Tab and shows a focus ring. A busy button keeps focus and ignores presses until its request finishes.
 
 | Section | What it shows |
 |---------|--------------|
-| **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers). A **Start tunnel** / **Stop tunnel** button brings up (or tears down) a cloudflared tunnel while `serve` keeps running — no restart needed. Starting can take up to ~30s (the button shows a busy state); the Tunnel URL and `cs1:` string update live once it's up. A **Show QR** button renders the Connection string as a QR code (toggle to hide) so a phone on the same LAN can scan it instead of copy/pasting; disabled until a valid Connection string exists. |
+| **Your Link** | LAN URL, Tunnel URL, and the shareable `cs1:` Connection string (copy this for peers). A **Start tunnel** / **Stop tunnel** button brings up (or tears down) a cloudflared tunnel while `serve` keeps running — no restart needed. Starting can take up to ~30s (the button shows a busy state); the Tunnel URL and `cs1:` string update live once it's up. A **Show QR** button renders the Connection string as a QR code (toggle to hide) so a phone on the same LAN can scan it instead of copy/pasting; disabled until a valid Connection string exists. The QR opens the peer's `/connect` page, which shows the `cs1:` string with its own Copy button. |
 | **Projects** | All git repos under PROJECTS_ROOT — Share/Unshare, per-project Leader checkbox. **Unshare** asks inline ("Unshare <name>?", Cancel / Unshare; Esc cancels) |
-| **Connect a Peer** | Paste a peer's `cs1:` connection string + give the peer a local name |
-| **Connected Peers** | Per peer, for every project both sides share (live peer catalog ∩ local registry, independent of registry peer-wiring state): a **↻ Fetch button** (checks ahead/behind status only, no repo changes), a **↕ Sync button** (performs a real pull-only sync — fetch + merge/rebase, never pushes — then refreshes the badge), and an ahead/behind badge. A **Clone button** is shown instead for projects the peer exposes that you don't have locally |
+| **Connect a Peer** | Paste a peer's `cs1:` connection string (or an authed URL) + give the peer a local name; Enter submits. The string field clears on success, since it carries the peer's token |
+| **Connected Peers** | Per peer, for every project both sides share (live peer catalog ∩ local registry, independent of registry peer-wiring state): a **↻ Fetch button** (checks ahead/behind status only, no repo changes), a **↕ Sync button** (performs a real pull-only sync — fetch + merge/rebase, never pushes — then refreshes the badge), and an ahead/behind badge. A **Clone button** is shown instead for projects the peer exposes that you don't have locally. Before the peer answers, the projects already wired to it are listed; an unreachable peer with none reads `Offline: <error>` |
 
 **Sync state badge** (per syncable project under each peer, updates after clicking either ↻ Fetch or ↕ Sync):
 - `✓ in sync` — identical tips
@@ -218,6 +222,9 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 - `↕ diverged` — both ahead and behind
 - `sync failed`, `err` (Fetch) or `clone failed` — the attempt errored (e.g. a merge/rebase conflict); open **Details** beside the badge for the full message, including any conflicting file list
 - A badge stays across the 15 s refresh until the next Fetch, Sync or Clone on that row.
+- With both sides followers (symmetric mode), a Sync creates a merge commit, so the badge then reads `↑1 ahead` until the peer syncs too.
+
+**Known limitation**: the connect page opened over plain-http LAN is not a secure context, so its browser offers no Clipboard API. **Copy** there selects the `cs1:` text for a manual copy instead.
 
 ## Tests
 
@@ -234,10 +241,13 @@ npm test      # node --test 'tests/*.test.mjs', then tsc -p frontend, then vites
 | `tests/dist.test.mjs` | The real build: servable file names, no inline script/style, relative URLs, head order, connect page loads only public files |
 | `tests/frontend-theme.test.mjs` | Theme wiring: the `@layer base` fallback, tokens only (no literal colours), no theme control besides `public/theme-init.js` |
 | `tests/connection-string.test.mjs` | `buildConnectionString` (`src/peer.js`) against the vector in `frontend/src/test/cs1-vector.json`, which the UI's tests share |
+| `tests/traversal.test.mjs` | Peer-supplied names and URLs (`src/names.js`): unsafe clone names refused with nothing created, served links kept inside `data/serve`, peer names never reach a shell or a git option, peer URLs http(s) only, git routes single-segment only; argv-form `sync` still merges and aborts conflicts cleanly |
 | `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, every request path relative (`api/…`) |
 | `frontend/src/**/*.test.{ts,tsx}` | Vitest (happy-dom, `fetch` stubbed, no backend): every section's states and actions with their exact request bodies, polling, the QR matrix, hostile content rendered as text, the connect page, `theme-init.js` |
 
-- Tests never start a real tunnel: `tests/_backend.mjs` replaces `src/tunnel.js` before the backend loads.
+- Tests never start a real tunnel: `tests/_backend.mjs` replaces `src/tunnel.js` before the backend loads, and points `PROJECTS_ROOT` at a temporary directory.
+- `tests/_isolatedData.mjs` gives a test file an in-memory config and registry and its own `data/serve`, so no test touches the checkout's `data/`.
+- Frontend test specifics: [docs/frontend.md](docs/frontend.md#tests).
 
 ## Connection string format
 
@@ -258,7 +268,7 @@ Both the web UI ("Your Link") and the CLI `status` command print the assembled s
 ```
 External HTTP server  0.0.0.0:<port>    ← auth (Basic x:<token>) + receive-pack block
   └─ /connect, /theme-init.js, /assets/*  ← connect page and only the files it loads (frontend/dist manifest), no auth
-  └─ git.handle(req,res)                ← node-git-server (single process, no proxy)
+  └─ /<name>.git/{info/refs,git-upload-pack,HEAD}  ← git.handle(req,res), node-git-server (single process, no proxy); any other path is a 404 (GIT_ROUTE_RE)
   └─ /control/register POST             ← peer handshake (accepts projectLeaders map)
   └─ /control/status   GET             ← catalog for authed peers (exposes per-project leader boolean)
 
@@ -311,6 +321,12 @@ code-share can be installed as a code-conductor plugin via the `conductor.plugin
 - Push is blocked at two independent layers (HTTP server + git server event hook).
 - Token auth is enforced before any request is routed, including control endpoints. The exceptions are the connect page and the files it loads; any other `/assets/*` path is a plain 404.
 - Both servers send a strict Content-Security-Policy and `X-Content-Type-Options: nosniff` on every response: `UI_CSP` in `src/webui.js`, `CONNECT_CSP` in `src/server.js`.
+- Strings a peer supplies never reach a path outside its root, a shell or a git option (`src/names.js`):
+  - **Project names** from a peer's catalog (Clone) must be one plain path segment: no `/` or `\`, no leading `.` or `-`, no control characters (`checkProjectName`). The clone lands directly inside `PROJECTS_ROOT` (`childPath`). A refused name is a 400 shown as `clone failed`.
+  - **Peer names** become git remote names, so they must match `PEER_NAME_RE`: letters, digits, `.`, `_`, `-`, starting with a letter or digit. This applies to `connect --name`, the web UI's peer name, and a peer registering itself.
+  - **Peer URLs** must be `http:` or `https:` (`checkPeerUrl`).
+  - Every git command runs in argv form with `--` before positional arguments; nothing goes through a shell.
+  - Any project name (CLI `share --as`, the web UI, the MCP `share` tool) must keep its `data/serve/<name>.git` link directly inside `data/serve` (`checkShareName`).
 - The `cs1:` connection string embeds the token — treat it like a password and share only over secure channels.
 - cloudflared must be installed separately (see Prerequisites). The app does not download it.
 

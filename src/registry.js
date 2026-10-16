@@ -2,6 +2,10 @@
 const fs = require('fs');
 const path = require('path');
 const { SERVE_DIR, PROJECTS_ROOT, loadRegistry, saveRegistry } = require('./config');
+const { checkShareName, childPath } = require('./names');
+
+// The served link for a project, always directly inside SERVE_DIR.
+const servePath = (name) => childPath(SERVE_DIR, checkShareName(name) + '.git');
 
 function isGitRepo(p) {
   try {
@@ -21,6 +25,7 @@ function listShared() {
 }
 
 function addProject(absPath, name, leader = false) {
+  const symlinkPath = servePath(name);
   absPath = path.resolve(absPath);
   if (!fs.existsSync(absPath)) throw new Error(`Path does not exist: ${absPath}`);
   if (!isGitRepo(absPath)) throw new Error(`Not a git repository: ${absPath}`);
@@ -29,7 +34,6 @@ function addProject(absPath, name, leader = false) {
   if (reg.find(p => p.name === name)) throw new Error(`Name already in use: ${name}`);
   if (reg.find(p => p.path === absPath)) throw new Error(`Repo already shared: ${absPath}`);
 
-  const symlinkPath = path.join(SERVE_DIR, name + '.git');
   // Remove stale symlink if present
   try { fs.unlinkSync(symlinkPath); } catch {}
   fs.symlinkSync(absPath, symlinkPath);
@@ -45,8 +49,7 @@ function removeProject(name) {
   const idx = reg.findIndex(p => p.name === name);
   if (idx === -1) throw new Error(`Project not found: ${name}`);
 
-  const symlinkPath = path.join(SERVE_DIR, name + '.git');
-  try { fs.unlinkSync(symlinkPath); } catch {}
+  try { fs.unlinkSync(servePath(name)); } catch {}
 
   reg.splice(idx, 1);
   saveRegistry(reg);

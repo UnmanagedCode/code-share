@@ -5,6 +5,7 @@ const https = require('https');
 const { loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
 const { isServing, isInternetUrl } = require('./serve-state');
+const { checkPeerName, checkPeerUrl } = require('./names');
 
 function authedUrl(base, token) {
   const u = new URL(base);
@@ -33,10 +34,11 @@ function buildConnectionString(base, token) {
 }
 
 // Run a git command with piped stdio so its stderr is captured and surfaced.
-// Mirrors src/sync.js's run(): the child's stdout/stderr are fresh pipes, never
+// Like git() in src/sync.js: the child's stdout/stderr are fresh pipes, never
 // the server's (possibly orphaned) stdio, so a dead parent's closed sockets
-// can't SIGPIPE the child. Uses argv form (not `sh -c`) so credential-bearing
-// URLs and arbitrary paths need no shell quoting.
+// can't SIGPIPE the child. Argv form (not `sh -c`), with `--` before positional
+// arguments, so credential-bearing URLs, paths and peer-supplied names are never
+// parsed by a shell or read as options.
 function runGit(args, opts = {}) {
   const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
   if (result.error) throw new Error(`Failed to run git: ${result.error.message}`);
@@ -46,19 +48,20 @@ function runGit(args, opts = {}) {
 function cloneRepo(url, token, dir) {
   const cloneUrl = token ? authedUrl(url, token) : url;
   const target = dir || '.';
-  const r = runGit(['clone', cloneUrl, target]);
+  const r = runGit(['clone', '--', cloneUrl, target]);
   if (r.code !== 0) {
     throw new Error((r.stderr || '').trim() || `git clone failed with status ${r.code}`);
   }
 }
 
 function addRemote(repoPath, name, url) {
-  const add = runGit(['-C', repoPath, 'remote', 'add', name, url]);
+  checkPeerName(name);
+  const add = runGit(['-C', repoPath, 'remote', 'add', '--', name, url]);
   if (add.code === 0) return;
   // Fall back to set-url only when the remote actually exists; surface every
   // other git failure with its real stderr instead of swallowing it.
   if (/already exists/i.test(add.stderr)) {
-    const set = runGit(['-C', repoPath, 'remote', 'set-url', name, url]);
+    const set = runGit(['-C', repoPath, 'remote', 'set-url', '--', name, url]);
     if (set.code !== 0) {
       throw new Error((set.stderr || '').trim() || `git remote set-url failed with status ${set.code}`);
     }
@@ -150,6 +153,8 @@ function postJSON(url, body, token) {
 
 async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   const { name = 'peer' } = opts;
+  checkPeerName(name);
+  checkPeerUrl(peerBaseUrl);
   const cfg = loadConfig();
 
   if (!(await isServing(cfg.port))) {

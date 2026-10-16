@@ -10,6 +10,7 @@ const { sync, getSyncState } = require('./sync');
 const tunnelManager = require('./tunnel-manager');
 const { handleMCP } = require('./mcp');
 const staticFiles = require('./static');
+const { checkProjectName, childPath } = require('./names');
 
 // Sent on every response. No 'unsafe-inline' anywhere: the UI uses no component
 // that injects a <style>, and the QR code is inline SVG elements (no img-src).
@@ -171,10 +172,17 @@ async function handleAPI(req, res) {
       sendJSON(res, 400, { error: 'peer and project are required' });
       return true;
     }
+    // `project` comes from the peer's catalog: one plain path segment, landing directly inside PROJECTS_ROOT.
+    let dest;
+    try {
+      dest = childPath(PROJECTS_ROOT, checkProjectName(project));
+    } catch (e) {
+      sendJSON(res, 400, { error: e.message });
+      return true;
+    }
     const cfg = loadConfig();
     const peerInfo = (cfg.peers || []).find(p => p.name === peerName);
     if (!peerInfo) { sendJSON(res, 404, { error: `Peer not found: ${peerName}` }); return true; }
-    const dest = path.join(PROJECTS_ROOT, project);
     if (fs.existsSync(dest)) { sendJSON(res, 400, { error: `Destination already exists: ${dest}` }); return true; }
     if (registry.findProject(project)) { sendJSON(res, 400, { error: `Name already in use: ${project}` }); return true; }
     try {
