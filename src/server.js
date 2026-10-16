@@ -1,13 +1,14 @@
 'use strict';
 const http = require('http');
-const fs = require('fs');
-const path = require('path');
 const { Git } = require('node-git-server');
 const { SERVE_DIR, loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
 const { addRemote, authedUrl } = require('./peer');
+const staticFiles = require('./static');
 
-const CONNECT_HTML = path.join(__dirname, '../static/connect.html');
+// Sent on every response of this public (tunneled) origin. The connect page is
+// never framed and posts no form; it loads no fonts or images.
+const CONNECT_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 function parseBasicAuth(req) {
   const header = req.headers['authorization'];
@@ -120,7 +121,7 @@ function handleStatus(req, res) {
   });
 }
 
-async function startServer(port, token) {
+async function startServer(port, token, host = '0.0.0.0') {
   const git = new Git(SERVE_DIR, { autoCreate: false });
 
   git.on('push', (push) => {
@@ -132,19 +133,16 @@ async function startServer(port, token) {
   });
 
   const server = http.createServer(async (req, res) => {
-    // Public connect landing page — deliberately unauthenticated: the token
-    // lives only in the URL fragment (never sent to the server), so a phone
-    // scanning the QR has no credentials to offer here.
-    if (req.method === 'GET' && req.url === '/connect') {
-      try {
-        const html = fs.readFileSync(CONNECT_HTML, 'utf8');
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
-        res.end(html);
-      } catch {
-        res.writeHead(500);
-        res.end('Connect page not found');
-      }
-      return;
+    // node-git-server's own writeHead merges these, so git responses carry them too.
+    res.setHeader('Content-Security-Policy', CONNECT_CSP);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    // Public connect landing page and the files it loads — deliberately
+    // unauthenticated: the token lives only in the URL fragment (never sent to
+    // the server), so a phone scanning the QR has no credentials to offer here.
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      const r = staticFiles.serveConnect(staticFiles.pathOf(req.url));
+      if (r) { staticFiles.send(req, res, r); return; }
     }
 
     // Enforce auth on every request
@@ -181,10 +179,10 @@ async function startServer(port, token) {
 
   await new Promise((resolve, reject) => {
     server.on('error', reject);
-    server.listen(port, '0.0.0.0', resolve);
+    server.listen(port, host, resolve);
   });
 
   return { server, git };
 }
 
-module.exports = { startServer };
+module.exports = { startServer, CONNECT_CSP };

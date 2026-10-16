@@ -1,0 +1,22 @@
+[
+  {
+    "base": "http://x:3f9a0c1e2b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4@192.168.1.20:9419",
+    "token": "3f9a0c1e2b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4",
+    "expected": "cs1:eyJ1cmwiOiJodHRwOi8vMTkyLjE2OC4xLjIwOjk0MTkiLCJ0b2tlbiI6IjNmOWEwYzFlMmI0ZDVmNmE3YjhjOWQwZTFmMmEzYjRjNWQ2ZTdmODA5MWEyYjNjNCJ9"
+  },
+  {
+    "base": "https://quiet-river-1234.trycloudflare.com/",
+    "token": "0123456789abcdef0123456789abcdef0123456789abcdef",
+    "expected": "cs1:eyJ1cmwiOiJodHRwczovL3F1aWV0LXJpdmVyLTEyMzQudHJ5Y2xvdWRmbGFyZS5jb20iLCJ0b2tlbiI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9"
+  },
+  {
+    "base": "http://10.0.0.7:19419/",
+    "token": "??>>~~",
+    "expected": "cs1:eyJ1cmwiOiJodHRwOi8vMTAuMC4wLjc6MTk0MTkiLCJ0b2tlbiI6Ij8_Pj5-fiJ9"
+  },
+  {
+    "base": "http://10.0.0.7:19419/",
+    "token": "tökén-✓",
+    "expected": "cs1:eyJ1cmwiOiJodHRwOi8vMTAuMC4wLjc6MTk0MTkiLCJ0b2tlbiI6InTDtmvDqW4t4pyTIn0"
+  }
+]

@@ -14,7 +14,8 @@ Peer-to-peer read-only Git repo sharing over LAN or the internet. Each party ser
 
 ## Prerequisites
 
-- **Node.js** (v18+)
+- **Node.js** 22.12 or newer.
+- **`npm install`** once in the checkout: it installs the dependencies and builds the web UI and the connect page into `frontend/dist/` (untracked). Until it has run, both pages answer a plain-text 503 `UI not built — run npm install`.
 - **cloudflared** — required for internet tunnels (`--tunnel cloudflared`, the default). Download from [developers.cloudflare.com](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). Not needed when using `--tunnel none` or `--tunnel localtunnel`.
 
 ## Quick starts
@@ -198,7 +199,7 @@ A tunnel can also be started or stopped later, without restarting `serve`, via t
 
 Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 
-- **Styling**: `static/ui.html` (the web UI) and `static/connect.html` (the QR landing page served by the git server at `/connect`) each copy the `:root` tokens of code-conductor's shell stylesheet (`public/styles.css` in code-conductor) into their inline `<style>`, because the host injects no theme into plugin iframes. Both pages are dark-only and share one identical `:root`. To restyle, re-copy the values from the host's `:root`.
+- **Styling**: the connect page (the QR landing page served by the git server at `/connect`) is built from `frontend/connect.html` with React, Tailwind v4 and code-conductor's components. It loads no code-conductor host URL: it uses the bundled snapshot of code-conductor's palette (`frontend/src/cc-theme-fallback.css`) and follows the OS light/dark setting live. `static/ui.html` (the web UI) copies the `:root` tokens of code-conductor's shell stylesheet into its inline `<style>` and is dark-only.
 - **Buttons**: the accent-filled `primary` class is reserved for a form's submit action. Every other button is a quiet panel button, tinted with a modifier class where meaningful: `start` (green, starts or enables), `danger` (red, destructive or stop), `caution` (amber, rewrites local history). Plain, `secondary` and `copy-btn` buttons stay untinted.
 
 | Section | What it shows |
@@ -218,11 +219,21 @@ Open `http://127.0.0.1:<uiPort>` (default 9420) while `serve` is running.
 ## Tests
 
 ```sh
-npm test   # runs node --test, no extra dependencies
+npm install   # once: dev dependencies and the frontend/dist build the tests read
+npm test      # node --test 'tests/*.test.mjs', then tsc -p frontend, then vitest
 ```
 
-- `tests/frontend-styles.test.mjs` is the style guard. It pins `static/ui.html` and `static/connect.html` to: dark-only (`color-scheme: dark`, no `prefers-color-scheme`); code-conductor's shell token names declared on `:root`; every `var(--…)` used in CSS, inline styles and JS strings declared there; the host font on `:root`, with monospace only via the host's `ui-monospace` stack; none of the legacy GitHub-dark palette (the list lives in the test's `LEGACY_HEX`); and one identical `:root` across both pages.
-- It reads the HTML as text and does not render the pages.
+| File | Guards |
+|---|---|
+| `tests/static.test.mjs` | `src/static.js`: what each server may serve from `frontend/dist` (`serveUi`, `serveConnect`, `connectAssets`), the 503 while unbuilt |
+| `tests/webui.test.mjs` | Web UI server: `UI_CSP` and `nosniff` on every response, host URLs 404, a handler error is a 500 the server survives |
+| `tests/gitserver.test.mjs` | Git server: `/connect` and its files public, everything else token-gated, `CONNECT_CSP` and `nosniff` on every response |
+| `tests/dist.test.mjs` | The real build: servable file names, no inline script/style, relative URLs, head order, connect page loads only public files |
+| `tests/frontend-theme.test.mjs` | Theme wiring: the `@layer base` fallback, tokens only (no literal colours), no theme control besides `public/theme-init.js` |
+| `tests/connection-string.test.mjs` | `buildConnectionString` (`src/peer.js`) against the vector in `frontend/src/test/cs1-vector.json`, which the UI's tests share |
+| `frontend/src/**/*.test.{ts,tsx}` | Vitest (happy-dom): connection-string helpers, `api()`, `theme-init.js`, the connect page's states and copy fallback |
+
+- Tests never start a real tunnel: `tests/_backend.mjs` replaces `src/tunnel.js` before the backend loads.
 
 ## Connection string format
 
@@ -242,6 +253,7 @@ Both the web UI ("Your Link") and the CLI `status` command print the assembled s
 
 ```
 External HTTP server  0.0.0.0:<port>    ← auth (Basic x:<token>) + receive-pack block
+  └─ /connect, /theme-init.js, /assets/*  ← connect page and only the files it loads (frontend/dist manifest), no auth
   └─ git.handle(req,res)                ← node-git-server (single process, no proxy)
   └─ /control/register POST             ← peer handshake (accepts projectLeaders map)
   └─ /control/status   GET             ← catalog for authed peers (exposes per-project leader boolean)
@@ -260,7 +272,7 @@ Web UI               127.0.0.1:<uiPort> ← never tunneled, localhost only
   └─ /api/tunnel/start                  ← start a tunnel while serve is running (body: {type?}, default cloudflared)
   └─ /api/tunnel/stop                   ← stop the active tunnel, back to LAN-only
   └─ /api/mcp                           ← MCP tool bridge (status/share/sync), see "Run as a code-conductor plugin"
-  └─ /vendor/qrcode.js                  ← vendored MIT QR generator (static/vendor/qrcode.js), powers the "Show QR" button, no CDN/network dependency
+  └─ /, /index.html, /theme-init.js, /assets/*  ← the built UI (frontend/dist); anything else is a 404
 
 Tunnel               (cloudflared/localtunnel) → wraps only the git server port
 ```
@@ -293,7 +305,8 @@ code-share can be installed as a code-conductor plugin via the `conductor.plugin
 
 - The tunnel carries only the git read-only endpoint. The web UI is localhost-only and is never tunneled — except indirectly through the code-conductor reverse proxy when installed as a plugin (see above).
 - Push is blocked at two independent layers (HTTP server + git server event hook).
-- Token auth is enforced before any request is routed, including control endpoints.
+- Token auth is enforced before any request is routed, including control endpoints. The exceptions are the connect page and the files it loads; any other `/assets/*` path is a plain 404.
+- Both servers send a strict Content-Security-Policy and `X-Content-Type-Options: nosniff` on every response: `UI_CSP` in `src/webui.js`, `CONNECT_CSP` in `src/server.js`.
 - The `cs1:` connection string embeds the token — treat it like a password and share only over secure channels.
 - cloudflared must be installed separately (see Prerequisites). The app does not download it.
 

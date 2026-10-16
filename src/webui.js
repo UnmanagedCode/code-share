@@ -9,9 +9,11 @@ const peer = require('./peer');
 const { sync, getSyncState } = require('./sync');
 const tunnelManager = require('./tunnel-manager');
 const { handleMCP } = require('./mcp');
+const staticFiles = require('./static');
 
-const UI_HTML = path.join(__dirname, '../static/ui.html');
-const VENDOR_QRCODE_JS = path.join(__dirname, '../static/vendor/qrcode.js');
+// Sent on every response. No 'unsafe-inline' anywhere: the UI uses no component
+// that injects a <style>, and the QR code is inline SVG elements (no img-src).
+const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
 
 // Authenticated GET to a peer's control endpoint
 function fetchJSON(url, token) {
@@ -299,42 +301,44 @@ async function handleAPI(req, res) {
   return false;
 }
 
+async function handleRequest(req, res) {
+  // JSON API
+  if (req.url && req.url.startsWith('/api/')) {
+    const handled = await handleAPI(req, res);
+    if (handled) return;
+  }
+
+  // Built UI: `/` (and its `/index.html` alias) and the hashed assets. No SPA
+  // fallback: anything else, the host URLs /pluginBridge.js and /pluginTheme.css
+  // included, is a real 404.
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const r = staticFiles.serveUi(staticFiles.pathOf(req.url));
+    if (r) { staticFiles.send(req, res, r); return; }
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('Not found\n');
+}
+
 async function startWebUI(uiPort) {
+  const indexHtml = staticFiles.distFile('index.html');
+  if (!fs.existsSync(indexHtml)) console.error(`UI not built: ${indexHtml} is missing — run npm install`);
+
   const server = http.createServer(async (req, res) => {
-    // JSON API
-    if (req.url && req.url.startsWith('/api/')) {
-      const handled = await handleAPI(req, res);
-      if (handled) return;
-    }
-
-    // Vendored QR code generator (offline-capable, no CDN dependency)
-    if (req.method === 'GET' && req.url === '/vendor/qrcode.js') {
-      try {
-        const js = fs.readFileSync(VENDOR_QRCODE_JS, 'utf8');
-        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Content-Length': Buffer.byteLength(js) });
-        res.end(js);
-      } catch {
-        res.writeHead(500);
-        res.end('Vendor file not found');
+    res.setHeader('Content-Security-Policy', UI_CSP);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    try {
+      await handleRequest(req, res);
+    } catch (e) {
+      console.error(`Web UI request failed: ${req.method} ${req.url}:`, e);
+      if (res.headersSent) { res.destroy(); return; }
+      if (req.url && req.url.startsWith('/api/')) {
+        sendJSON(res, 500, { error: 'Internal error' });
+      } else {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Internal error\n');
       }
-      return;
     }
-
-    // Serve UI
-    if (req.method === 'GET' && (req.url === '/' || req.url === '' || req.url === '/index.html')) {
-      try {
-        const html = fs.readFileSync(UI_HTML, 'utf8');
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
-        res.end(html);
-      } catch {
-        res.writeHead(500);
-        res.end('UI file not found');
-      }
-      return;
-    }
-
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not found\n');
   });
 
   await new Promise((resolve, reject) => {
@@ -346,4 +350,4 @@ async function startWebUI(uiPort) {
   return server;
 }
 
-module.exports = { startWebUI };
+module.exports = { startWebUI, UI_CSP };
