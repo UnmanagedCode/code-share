@@ -150,7 +150,8 @@ async function handleAPI(req, res) {
     const cfg = loadConfig();
     const peerInfo = (cfg.peers || []).find(p => p.name === peerName);
     if (!peerInfo) { sendJSON(res, 404, { error: `Peer not found: ${peerName}` }); return true; }
-    if (fs.existsSync(dest)) { sendJSON(res, 400, { error: `Destination already exists: ${dest}` }); return true; }
+    // peer.exists, not fs.existsSync: a dangling symlink holds the name too.
+    if (peer.exists(dest)) { sendJSON(res, 400, { error: `Destination already exists: ${dest}` }); return true; }
     if (registry.findProject(project)) { sendJSON(res, 400, { error: `Name already in use: ${project}` }); return true; }
     try {
       const projUrl = peerInfo.url.replace(/\/?$/, '') + '/' + project + '.git';

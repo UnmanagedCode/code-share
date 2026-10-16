@@ -38,13 +38,32 @@ function buildConnectionString(base, token) {
 // Git runs through runGit (src/git.js): argv only, with `--` before positional
 // arguments, so credential-bearing URLs, paths and peer-supplied names are
 // never parsed by a shell or read as options.
-const cloneError = (r) => new Error((r.stderr || '').trim() || `git clone failed with status ${r.code}`);
+// A failed clone's error names the target the caller asked for, never the staging directory git was writing.
+const cloneError = (r, stage, target) => {
+  const text = (r.stderr || '').trim() || `git clone failed with status ${r.code}`;
+  return new Error(stage ? text.split(stage).join(target) : text);
+};
+
+// Test seam: the platform whose rename semantics apply.
+const host = { platform: process.platform };
+
+// Moves the finished clone onto the claimed (empty) target. POSIX rename replaces an empty directory; Windows
+// refuses to rename onto any directory, so there the empty claim is removed and the rename retried once.
+function moveIntoPlace(stage, target) {
+  try {
+    fs.renameSync(stage, target);
+  } catch (e) {
+    if (host.platform !== 'win32' || (e.code !== 'EPERM' && e.code !== 'EEXIST')) throw e;
+    fs.rmdirSync(target);
+    fs.renameSync(stage, target);
+  }
+}
 
 // A new target is cloned into a staging directory beside it (src/clone-staging.js)
 // and moved into place only when complete: a failed, killed or concurrent clone
 // never leaves anything under the target's name, and never removes what another
 // clone put there. The name is claimed with mkdir, which fails if anything holds
-// it; rename then replaces that empty directory in one step.
+// it; the clone is then moved onto that empty directory (moveIntoPlace).
 // An existing target (`clone --dir` an empty directory) is cloned into directly,
 // as git allows, and is never removed.
 async function cloneRepo(url, token, dir) {
@@ -58,14 +77,14 @@ async function cloneRepo(url, token, dir) {
   const stage = staging.stagingPathFor(target);
   try {
     const r = await runGit(['clone', '--', cloneUrl, stage]);
-    if (r.code !== 0) throw cloneError(r);
+    if (r.code !== 0) throw cloneError(r, stage, target);
     try {
       fs.mkdirSync(target);
     } catch (e) {
       throw new Error(e.code === 'EEXIST' ? `Destination already exists: ${target}` : e.message);
     }
     try {
-      fs.renameSync(stage, target);
+      moveIntoPlace(stage, target);
     } catch (e) {
       try { fs.rmdirSync(target); } catch { /* not ours to remove once it is not empty */ }
       throw e;
@@ -76,6 +95,7 @@ async function cloneRepo(url, token, dir) {
 }
 
 // Whether anything (a dangling symlink included) is at `p`.
+/** Whether anything is at `p`, a dangling symlink included (symlinks are not followed). */
 function exists(p) {
   try {
     fs.lstatSync(p);
@@ -235,4 +255,4 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   return peerResp;
 }
 
-module.exports = { cloneRepo, connectPeer, addRemote, authedUrl, buildConnectionString, wirePeerRemote, wireConnectedPeers };
+module.exports = { cloneRepo, exists, _host: host, connectPeer, addRemote, authedUrl, buildConnectionString, wirePeerRemote, wireConnectedPeers };

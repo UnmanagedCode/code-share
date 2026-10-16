@@ -43,8 +43,8 @@ process.on('exit', () => {
   releaseAllStaging();
 });
 
-/** Whether a directory entry name is a staging directory (never a project). */
-const isStagingName = (name) => name.startsWith(STAGING_PREFIX);
+/** Whether a directory entry name is a staging directory (never a project): exactly STAGING_RE. */
+const isStagingName = (name) => STAGING_RE.test(name);
 
 function alive(pid) {
   try {

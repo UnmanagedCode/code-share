@@ -34,14 +34,22 @@ function failGitResponse(res, what, err) {
 }
 
 /**
- * The upload-pack ref advertisement (`GET /<repo>.git/info/refs?service=git-upload-pack`), as node-git-server
- * sends it, except that nothing is written until git-upload-pack has started. node-git-server writes its 200 first,
- * so a failed start reached the client as an empty advertisement, which git reads as an empty repository.
+ * The upload-pack ref advertisement (`GET /<repo>.git/info/refs?service=git-upload-pack`), byte for byte as
+ * node-git-server sends it, except that nothing is written until git-upload-pack has produced output. node-git-server
+ * writes its 200 first, so a git-upload-pack that could not start, or found no repository, reached the client as an
+ * empty advertisement; here either is a 500.
  */
 function serveAdvertisement(repoDir, res) {
   const child = spawn('git-upload-pack', ['--stateless-rpc', '--advertise-refs', repoDir], { stdio: ['ignore', 'pipe', 'ignore'] });
-  child.on('error', (e) => failGitResponse(res, 'git-upload-pack --advertise-refs did not start', e));
-  child.on('spawn', () => {
+  let started = false;
+  let failed = false;
+  const fail = (what, e) => {
+    if (failed) return;
+    failed = true;
+    failGitResponse(res, what, e);
+  };
+  const start = () => {
+    started = true;
     res.writeHead(200, {
       'Content-Type': 'application/x-git-upload-pack-advertisement',
       'Expires': 'Fri, 01 Jan 1980 00:00:00 GMT',
@@ -49,7 +57,21 @@ function serveAdvertisement(repoDir, res) {
       'Cache-Control': 'no-cache, max-age=0, must-revalidate',
     });
     res.write(pktLine('# service=git-upload-pack\n') + '0000');
+  };
+  child.on('error', (e) => fail('git-upload-pack --advertise-refs did not start', e));
+  child.stdout.once('data', (first) => {
+    start();
+    res.write(first);
     child.stdout.pipe(res);
+  });
+  child.on('close', (code) => {
+    if (started || failed) return;
+    if (code === 0) {
+      start();
+      res.end();
+    } else {
+      fail('git-upload-pack --advertise-refs failed', new Error(`exit status ${code} for ${repoDir}`));
+    }
   });
   res.on('close', () => { if (child.exitCode === null) child.kill(); });
 }

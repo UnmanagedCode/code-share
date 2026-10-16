@@ -158,3 +158,31 @@ test('git-upload-pack failing to start is a 500, and the server stays up', async
   assert.equal(again.status, 200);
   assert.match(again.body, new RegExp(`^001e# service=git-upload-pack\n0000[0-9a-f]{4}${sha} `));
 });
+
+// Invariant (N1): a served link whose target is not a git repository is a 500 with one log line, never a 200 with
+// an empty advertisement (which git reports as a misleading access error); the server stays up, and a real repo
+// still clones through the same advertisement.
+test('a served link to a non-repository is a 500, and real repos still clone', async () => {
+  const plain = path.join(ROOT, 'not-a-repo');
+  mkdirSync(plain);
+  symlinkSync(plain, path.join(SERVE_DIR, 'plain.git'));
+  const logged = [];
+  const error = console.error;
+  console.error = (...a) => logged.push(a.join(' '));
+  let r;
+  try {
+    r = await request(`http://127.0.0.1:${port}/plain.git/info/refs?service=git-upload-pack`, { headers: { authorization: AUTH } });
+  } finally {
+    console.error = error;
+  }
+  assert.equal(r.status, 500, r.body);
+  assert.equal(r.body, 'git failed on the server\n');
+  assert.equal(logged.length, 1, logged.join('\n'));
+  assert.match(logged[0], /^Git server: git-upload-pack --advertise-refs failed: exit status \d+ for /);
+  assert.equal((await request(`http://127.0.0.1:${port}/connect`)).status !== 0, true);
+  const dest = mkdtempSync(path.join(os.tmpdir(), 'code-share-clone-ok-'));
+  // Asynchronously: the server answering this clone runs in this process.
+  const cloned = await new Promise((res) => spawn('git', ['clone', '-q', `http://x:tok@127.0.0.1:${port}/r.git`, path.join(dest, 'r')], { stdio: 'ignore' }).on('close', res));
+  assert.equal(cloned, 0);
+  assert.equal(execFileSync('git', ['-C', path.join(dest, 'r'), 'rev-parse', 'refs/remotes/origin/main'], { encoding: 'utf8' }).trim(), sha);
+});
