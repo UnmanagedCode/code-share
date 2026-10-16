@@ -1,67 +1,39 @@
 'use strict';
-const http = require('http');
-const https = require('https');
-const { spawnSync } = require('child_process');
 const { loadRegistry } = require('./config');
+const { checkPeerName, checkBranch } = require('./names');
+const { runGit } = require('./git');
+const { peerRequest } = require('./peer-http');
+const { LIMITS } = require('./limits');
 
-function run(cmd, cwd, opts = {}) {
-  const result = spawnSync('sh', ['-c', cmd], {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    ...opts
-  });
-  return { stdout: result.stdout || '', stderr: result.stderr || '', code: result.status || 0 };
-}
+const git = (args, cwd) => runGit(args, { cwd });
 
-function getConflictingFiles(repoPath) {
-  const r = run('git diff --name-only --diff-filter=U', repoPath);
+async function getConflictingFiles(repoPath) {
+  const r = await git(['diff', '--name-only', '--diff-filter=U'], repoPath);
   return r.stdout.split('\n').map(l => l.trim()).filter(Boolean);
 }
 
 // Try to fetch the peer's current leader flag for this project from their live /control/status.
-// Falls back to the value stored in the registry if the peer is unreachable.
-function fetchPeerLeaderFlag(proj, remoteName) {
+// Falls back to the value stored in the registry if the peer is unreachable or slow.
+async function fetchPeerLeaderFlag(proj, remoteName) {
   const peerEntry = (proj.peers || []).find(p => p.name === remoteName);
-  if (!peerEntry) return Promise.resolve(false);
+  if (!peerEntry) return false;
   const stored = typeof peerEntry.leader === 'boolean' ? peerEntry.leader : false;
-
-  return new Promise((resolve) => {
-    try {
-      const statusUrl = peerEntry.url.replace(/\/?$/, '') + '/control/status';
-      const u = new URL(statusUrl);
-      const opts = {
-        hostname: u.hostname,
-        port: u.port || (u.protocol === 'https:' ? 443 : 80),
-        path: '/control/status',
-        method: 'GET',
-        headers: { 'Authorization': `Basic ${Buffer.from(`x:${peerEntry.token}`).toString('base64')}` }
-      };
-      const mod = u.protocol === 'https:' ? https : http;
-      const req = mod.request(opts, (res) => {
-        const chunks = [];
-        res.on('data', c => chunks.push(c));
-        res.on('end', () => {
-          try {
-            const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            const ps = (data.shared || []).find(s => s.name === proj.name);
-            resolve(typeof ps?.leader === 'boolean' ? ps.leader : stored);
-          } catch {
-            resolve(stored);
-          }
-        });
-      });
-      req.on('error', () => resolve(stored));
-      req.setTimeout(5000, () => { req.destroy(); resolve(stored); });
-      req.end();
-    } catch {
-      resolve(stored);
-    }
-  });
+  try {
+    const data = await peerRequest(peerEntry.url.replace(/\/?$/, '') + '/control/status', {
+      token: peerEntry.token,
+      timeoutMs: LIMITS.LEADER_FLAG_TIMEOUT_MS,
+    });
+    const ps = ((data && data.shared) || []).find(s => s.name === proj.name);
+    return typeof ps?.leader === 'boolean' ? ps.leader : stored;
+  } catch {
+    return stored;
+  }
 }
 
 async function sync(projectName, opts = {}) {
   const { remote = 'peer', branch, useRebase = false } = opts;
+  checkPeerName(remote);
+  if (branch) checkBranch(branch);
 
   const reg = loadRegistry();
   let proj;
@@ -81,7 +53,7 @@ async function sync(projectName, opts = {}) {
 
   // Step 1: fetch (pull-only — never pushes)
   console.log(`Fetching from ${remote}...`);
-  const fetchResult = run(`git fetch "${remote}" ${remoteBranch}`, repoPath);
+  const fetchResult = await git(['fetch', '--', remote, remoteBranch], repoPath);
   if (fetchResult.code !== 0) {
     throw new Error(`git fetch failed:\n${fetchResult.stderr}`);
   }
@@ -94,22 +66,22 @@ async function sync(projectName, opts = {}) {
 
   if (useRebase) {
     console.log('Rebasing onto FETCH_HEAD...');
-    const r = run('git rebase FETCH_HEAD', repoPath);
+    const r = await git(['rebase', 'FETCH_HEAD'], repoPath);
     if (r.code !== 0) {
-      const conflicts = getConflictingFiles(repoPath);
-      run('git rebase --abort', repoPath);
+      const conflicts = await getConflictingFiles(repoPath);
+      await git(['rebase', '--abort'], repoPath);
       throw new Error(`Rebase conflict. Aborted cleanly. Conflicting files:\n${conflicts.map(f => '  ' + f).join('\n') || '  (see git status for details)'}`);
     }
   } else if (isFollower) {
     // Fast-forward to leader's tip; rebase local commits on top if needed
     console.log('Follower fast-forward sync...');
-    const ffResult = run('git merge --ff-only FETCH_HEAD', repoPath);
+    const ffResult = await git(['merge', '--ff-only', 'FETCH_HEAD'], repoPath);
     if (ffResult.code !== 0) {
       console.log('Cannot fast-forward; rebasing local commits on top of leader tip...');
-      const rebaseResult = run('git rebase FETCH_HEAD', repoPath);
+      const rebaseResult = await git(['rebase', 'FETCH_HEAD'], repoPath);
       if (rebaseResult.code !== 0) {
-        const conflicts = getConflictingFiles(repoPath);
-        run('git rebase --abort', repoPath);
+        const conflicts = await getConflictingFiles(repoPath);
+        await git(['rebase', '--abort'], repoPath);
         throw new Error(`Rebase conflict on follower sync. Aborted cleanly. Conflicting files:\n${conflicts.map(f => '  ' + f).join('\n') || '  (see git status for details)'}`);
       }
     }
@@ -117,17 +89,17 @@ async function sync(projectName, opts = {}) {
     // Symmetric (both same flag) or leader ingesting follower — merge --no-ff
     const label = (myLeader && !peerLeader) ? 'Leader ingesting follower' : 'Symmetric merge';
     console.log(`${label} (merge --no-ff)...`);
-    const mergeResult = run('git merge --no-ff FETCH_HEAD -m "code-share: sync merge"', repoPath);
+    const mergeResult = await git(['merge', '--no-ff', '-m', 'code-share: sync merge', 'FETCH_HEAD'], repoPath);
     if (mergeResult.code !== 0) {
-      const conflicts = getConflictingFiles(repoPath);
-      run('git merge --abort', repoPath);
+      const conflicts = await getConflictingFiles(repoPath);
+      await git(['merge', '--abort'], repoPath);
       throw new Error(`Merge conflict. Aborted cleanly. Conflicting files:\n${conflicts.map(f => '  ' + f).join('\n') || '  (see git status for details)'}`);
     }
   }
 
   console.log('Sync complete.');
 
-  const log = run(`git log --oneline -3`, repoPath);
+  const log = await git(['log', '--oneline', '-3'], repoPath);
   if (log.stdout.trim()) {
     console.log('Recent commits:\n' + log.stdout.trim().split('\n').map(l => '  ' + l).join('\n'));
   }
@@ -137,8 +109,9 @@ async function sync(projectName, opts = {}) {
 
 // Read-only divergence check: fetches remote then counts ahead/behind commits.
 // Does NOT touch the working tree or current branch.
-function getSyncState(projectName, opts = {}) {
+async function getSyncState(projectName, opts = {}) {
   const { remote = 'peer' } = opts;
+  checkPeerName(remote);
 
   const reg = loadRegistry();
   const proj = reg.find(p => p.name === projectName);
@@ -146,13 +119,13 @@ function getSyncState(projectName, opts = {}) {
 
   const repoPath = proj.path;
 
-  const fetchResult = run(`git fetch "${remote}"`, repoPath);
+  const fetchResult = await git(['fetch', '--', remote], repoPath);
   if (fetchResult.code !== 0) {
     throw new Error(`git fetch failed: ${fetchResult.stderr.trim()}`);
   }
 
-  const behindResult = run('git rev-list --count HEAD..FETCH_HEAD', repoPath);
-  const aheadResult  = run('git rev-list --count FETCH_HEAD..HEAD', repoPath);
+  const behindResult = await git(['rev-list', '--count', 'HEAD..FETCH_HEAD'], repoPath);
+  const aheadResult  = await git(['rev-list', '--count', 'FETCH_HEAD..HEAD'], repoPath);
   const behind = parseInt(behindResult.stdout.trim(), 10) || 0;
   const ahead  = parseInt(aheadResult.stdout.trim(), 10)  || 0;
 

@@ -1,10 +1,14 @@
 'use strict';
-const { spawn, execSync } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
+const { LIMITS } = require('./limits');
 
 function ensureCloudflared() {
   try {
-    execSync('cloudflared --version', { stdio: 'ignore' });
-  } catch {
+    execFileSync('cloudflared', ['--version'], { stdio: 'ignore', timeout: LIMITS.CLOUDFLARED_CHECK_TIMEOUT_MS });
+  } catch (e) {
+    if (e.code === 'ETIMEDOUT') {
+      throw new Error(`cloudflared --version did not answer within ${Math.round(LIMITS.CLOUDFLARED_CHECK_TIMEOUT_MS / 1000)}s`);
+    }
     throw new Error(
       'cloudflared not found in PATH.\n' +
       'Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/\n' +
@@ -62,4 +66,4 @@ async function startTunnel(type, port) {
   }
 }
 
-module.exports = { startTunnel };
+module.exports = { startTunnel, ensureCloudflared };

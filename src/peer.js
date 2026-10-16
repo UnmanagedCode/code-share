@@ -1,10 +1,13 @@
 'use strict';
-const { spawnSync } = require('child_process');
-const http = require('http');
-const https = require('https');
+const fs = require('fs');
+const path = require('path');
 const { loadConfig, saveConfig, loadRegistry, saveRegistry } = require('./config');
 const registry = require('./registry');
 const { isServing, isInternetUrl } = require('./serve-state');
+const { checkPeerName, checkPeerUrl } = require('./names');
+const { runGit } = require('./git');
+const staging = require('./clone-staging');
+const { peerRequest } = require('./peer-http');
 
 function authedUrl(base, token) {
   const u = new URL(base);
@@ -14,8 +17,9 @@ function authedUrl(base, token) {
 }
 
 // Build a cs1: connection string from a base URL + token (mirrors the web UI's
-// makeConnectionString in static/ui.html). Strips any embedded credentials and
-// base64url-encodes a {url, token} payload. Returns null if url is missing/invalid.
+// makeConnectionString in frontend/src/lib/connectionString.ts; both are pinned
+// to frontend/src/test/cs1-vector.json). Strips any embedded credentials and
+// base64url-encodes a {url, token} payload as UTF-8. Returns null if url is missing/invalid.
 function buildConnectionString(base, token) {
   if (!base) return null;
   try {
@@ -31,33 +35,84 @@ function buildConnectionString(base, token) {
   }
 }
 
-// Run a git command with piped stdio so its stderr is captured and surfaced.
-// Mirrors src/sync.js's run(): the child's stdout/stderr are fresh pipes, never
-// the server's (possibly orphaned) stdio, so a dead parent's closed sockets
-// can't SIGPIPE the child. Uses argv form (not `sh -c`) so credential-bearing
-// URLs and arbitrary paths need no shell quoting.
-function runGit(args, opts = {}) {
-  const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
-  if (result.error) throw new Error(`Failed to run git: ${result.error.message}`);
-  return { stdout: result.stdout || '', stderr: result.stderr || '', code: result.status };
-}
+// Git runs through runGit (src/git.js): argv only, with `--` before positional
+// arguments, so credential-bearing URLs, paths and peer-supplied names are
+// never parsed by a shell or read as options.
+// A failed clone's error names the target the caller asked for, never the staging directory git was writing.
+const cloneError = (r, stage, target) => {
+  const text = (r.stderr || '').trim() || `git clone failed with status ${r.code}`;
+  return new Error(stage ? text.split(stage).join(target) : text);
+};
 
-function cloneRepo(url, token, dir) {
-  const cloneUrl = token ? authedUrl(url, token) : url;
-  const target = dir || '.';
-  const r = runGit(['clone', cloneUrl, target]);
-  if (r.code !== 0) {
-    throw new Error((r.stderr || '').trim() || `git clone failed with status ${r.code}`);
+// Test seam: the platform whose rename semantics apply.
+const host = { platform: process.platform };
+
+// Moves the finished clone onto the claimed (empty) target. POSIX rename replaces an empty directory; Windows
+// refuses to rename onto any directory, so there the empty claim is removed and the rename retried once.
+function moveIntoPlace(stage, target) {
+  try {
+    fs.renameSync(stage, target);
+  } catch (e) {
+    if (host.platform !== 'win32' || (e.code !== 'EPERM' && e.code !== 'EEXIST')) throw e;
+    fs.rmdirSync(target);
+    fs.renameSync(stage, target);
   }
 }
 
-function addRemote(repoPath, name, url) {
-  const add = runGit(['-C', repoPath, 'remote', 'add', name, url]);
+// A new target is cloned into a staging directory beside it (src/clone-staging.js)
+// and moved into place only when complete: a failed, killed or concurrent clone
+// never leaves anything under the target's name, and never removes what another
+// clone put there. The name is claimed with mkdir, which fails if anything holds
+// it; the clone is then moved onto that empty directory (moveIntoPlace).
+// An existing target (`clone --dir` an empty directory) is cloned into directly,
+// as git allows, and is never removed.
+async function cloneRepo(url, token, dir) {
+  const cloneUrl = token ? authedUrl(url, token) : url;
+  const target = path.resolve(dir || '.');
+  if (exists(target)) {
+    const r = await runGit(['clone', '--', cloneUrl, target]);
+    if (r.code !== 0) throw cloneError(r);
+    return;
+  }
+  const stage = staging.stagingPathFor(target);
+  try {
+    const r = await runGit(['clone', '--', cloneUrl, stage]);
+    if (r.code !== 0) throw cloneError(r, stage, target);
+    try {
+      fs.mkdirSync(target);
+    } catch (e) {
+      throw new Error(e.code === 'EEXIST' ? `Destination already exists: ${target}` : e.message);
+    }
+    try {
+      moveIntoPlace(stage, target);
+    } catch (e) {
+      try { fs.rmdirSync(target); } catch { /* not ours to remove once it is not empty */ }
+      throw e;
+    }
+  } finally {
+    staging.releaseStaging(stage);
+  }
+}
+
+// Whether anything (a dangling symlink included) is at `p`.
+/** Whether anything is at `p`, a dangling symlink included (symlinks are not followed). */
+function exists(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function addRemote(repoPath, name, url) {
+  checkPeerName(name);
+  const add = await runGit(['-C', repoPath, 'remote', 'add', '--', name, url]);
   if (add.code === 0) return;
   // Fall back to set-url only when the remote actually exists; surface every
   // other git failure with its real stderr instead of swallowing it.
   if (/already exists/i.test(add.stderr)) {
-    const set = runGit(['-C', repoPath, 'remote', 'set-url', name, url]);
+    const set = await runGit(['-C', repoPath, 'remote', 'set-url', '--', name, url]);
     if (set.code !== 0) {
       throw new Error((set.stderr || '').trim() || `git remote set-url failed with status ${set.code}`);
     }
@@ -69,9 +124,9 @@ function addRemote(repoPath, name, url) {
 // Wire one peer's git remote + registry peer entry onto a project. Idempotent
 // (addRemote does add → set-url). `pr` is a peer config entry { name, url, token }.
 // Returns { name, url } (the project's URL on that peer) for caller-side logging.
-function wirePeerRemote(projectName, repoPath, pr) {
+async function wirePeerRemote(projectName, repoPath, pr) {
   const projUrl = pr.url.replace(/\/?$/, '') + '/' + projectName + '.git';
-  addRemote(repoPath, pr.name, authedUrl(projUrl, pr.token));
+  await addRemote(repoPath, pr.name, authedUrl(projUrl, pr.token));
   registry.addPeerToProject(projectName, { name: pr.name, url: pr.url, token: pr.token, leader: false });
   return { name: pr.name, url: projUrl };
 }
@@ -79,76 +134,31 @@ function wirePeerRemote(projectName, repoPath, pr) {
 // Wire every currently-connected peer onto a project. Shared by the CLI `share`
 // command and the web UI's /api/share and /api/clone so the peer association is
 // populated consistently no matter which path shares a project.
+// A stored peer entry that cannot be wired (a name outside PEER_NAME_RE, a
+// non-http(s) URL) is skipped with a logged error, so one bad entry never
+// blocks sharing.
 // Returns the list of wired peers ([{ name, url }]) for caller-side logging.
-function wireConnectedPeers(projectName, repoPath) {
+async function wireConnectedPeers(projectName, repoPath) {
   const cfg = loadConfig();
-  return (cfg.peers || []).map(pr => wirePeerRemote(projectName, repoPath, pr));
-}
-
-function getJSON(url, token) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (u.protocol === 'https:' ? 443 : 80),
-      path: u.pathname + (u.search || ''),
-      method: 'GET',
-      headers: {
-        'Authorization': `Basic ${Buffer.from(`x:${token}`).toString('base64')}`
-      }
-    };
-    const mod = u.protocol === 'https:' ? https : http;
-    const req = mod.request(opts, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        if (res.statusCode >= 400) { reject(new Error(`HTTP ${res.statusCode}: ${text.trim()}`)); return; }
-        try { resolve(JSON.parse(text)); } catch { resolve(text); }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-function postJSON(url, body, token) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const payload = JSON.stringify(body);
-    const opts = {
-      hostname: u.hostname,
-      port: u.port || (u.protocol === 'https:' ? 443 : 80),
-      path: u.pathname,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-        'Authorization': `Basic ${Buffer.from(`x:${token}`).toString('base64')}`
-      }
-    };
-    const mod = u.protocol === 'https:' ? https : http;
-    const req = mod.request(opts, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        if (res.statusCode >= 400) {
-          reject(new Error(`HTTP ${res.statusCode}: ${text.trim()}`));
-          return;
-        }
-        try { resolve(JSON.parse(text)); }
-        catch { resolve(text); }
-      });
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
+  const wired = [];
+  for (const pr of cfg.peers || []) {
+    try {
+      checkPeerName(pr.name);
+      checkPeerUrl(pr.url);
+    } catch (e) {
+      // console.error, never process.stderr.write: see the note in connectPeer.
+      console.error(`Skipping peer ${JSON.stringify(pr.name)} for ${projectName}: ${e.message}`);
+      continue;
+    }
+    wired.push(await wirePeerRemote(projectName, repoPath, pr));
+  }
+  return wired;
 }
 
 async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   const { name = 'peer' } = opts;
+  checkPeerName(name);
+  checkPeerUrl(peerBaseUrl);
   const cfg = loadConfig();
 
   if (!(await isServing(cfg.port))) {
@@ -183,12 +193,11 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   const registerUrl = peerBaseUrl.replace(/\/?$/, '') + '/control/register';
   let peerResp;
   try {
-    peerResp = await postJSON(registerUrl, {
-      url: selfUrl,
-      token: selfToken,
-      name,
-      projectLeaders
-    }, peerToken);
+    peerResp = await peerRequest(registerUrl, {
+      method: 'POST',
+      body: { url: selfUrl, token: selfToken, name, projectLeaders },
+      token: peerToken,
+    });
   } catch (e) {
     throw new Error(`Failed to reach peer at ${registerUrl}: ${e.message}`);
   }
@@ -197,7 +206,7 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   let peerLeaders = {};
   try {
     const statusUrl = peerBaseUrl.replace(/\/?$/, '') + '/control/status';
-    const peerStatus = await getJSON(statusUrl, peerToken);
+    const peerStatus = await peerRequest(statusUrl, { token: peerToken });
     for (const s of (peerStatus.shared || [])) {
       peerLeaders[s.name] = s.leader ?? false;
     }
@@ -212,7 +221,7 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   for (const proj of reg) {
     const authedPeerUrl = authedUrl(peerBaseUrl.replace(/\/?$/, '') + '/' + proj.name + '.git', peerToken);
     try {
-      addRemote(proj.path, name, authedPeerUrl);
+      await addRemote(proj.path, name, authedPeerUrl);
     } catch (e) {
       // NOTE: console.error is deliberate — on a server whose stdio is an
       // orphaned socketpair (dead parent), Node's Console drops the bytes on
@@ -246,4 +255,4 @@ async function connectPeer(peerBaseUrl, peerToken, opts = {}) {
   return peerResp;
 }
 
-module.exports = { cloneRepo, connectPeer, addRemote, authedUrl, buildConnectionString, wirePeerRemote, wireConnectedPeers };
+module.exports = { cloneRepo, exists, _host: host, connectPeer, addRemote, authedUrl, buildConnectionString, wirePeerRemote, wireConnectedPeers };

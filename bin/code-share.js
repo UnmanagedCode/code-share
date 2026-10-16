@@ -13,6 +13,23 @@ const { cloneRepo, connectPeer, authedUrl, addRemote, buildConnectionString, wir
 const { sync } = require('../src/sync');
 const { isServing } = require('../src/serve-state');
 const tunnelManager = require('../src/tunnel-manager');
+const { killAllGit } = require('../src/git');
+const { releaseAllStaging, sweepStaleStaging } = require('../src/clone-staging');
+
+// git commands run in their own process groups (src/git.js), which a signal to
+// this process does not reach: kill them first, then remove the staging
+// directories of clones they were making. `serve` then stops its tunnel and
+// exits 0; any other command dies by the signal, as without this handler.
+let onShutdown = null;
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    killAllGit();
+    releaseAllStaging();
+    if (onShutdown) { onShutdown(); return; }
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
+  });
+}
 
 const program = new Command();
 
@@ -31,6 +48,7 @@ program
   .option('--mdns', 'advertise via mDNS')
   .option('--token <t>', 'override token')
   .action(async (opts) => {
+    for (const dir of sweepStaleStaging(PROJECTS_ROOT)) console.log(`Removed stale clone staging directory ${dir}`);
     const cfg = loadConfig();
     if (opts.port) cfg.port = opts.port;
     if (opts.uiPort) cfg.uiPort = opts.uiPort;
@@ -105,8 +123,7 @@ program
     console.log(`Web UI: http://127.0.0.1:${effectiveUiPort}`);
     console.log('\nPress Ctrl+C to stop.');
 
-    process.on('SIGINT', () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); });
-    process.on('SIGTERM', () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); });
+    onShutdown = () => { tunnelManager.stopRuntimeTunnel(); process.exit(0); };
   });
 
 // ─── share ────────────────────────────────────────────────────────────────────
@@ -137,7 +154,7 @@ program
       // Wire the peer git remote for every already-connected peer, mirroring the
       // handleRegister principle: wire wherever a (project, peer) pair becomes known.
       // Idempotent (addRemote does add → set-url). sync fetches the live leader flag.
-      for (const w of wireConnectedPeers(name, entry.path)) {
+      for (const w of await wireConnectedPeers(name, entry.path)) {
         console.log(`  Wired peer remote: ${w.name} → ${w.url}`);
       }
     } catch (e) {
@@ -190,7 +207,7 @@ program
   .command('clone <peer> <project>')
   .description('Clone a project from a connected peer (run `connect` first)')
   .option('--dir <path>', 'destination directory (default: ./<project>)')
-  .action((peerName, project, opts) => {
+  .action(async (peerName, project, opts) => {
     const cfg = loadConfig();
     const peer = (cfg.peers || []).find(p => p.name === peerName);
     if (!peer) {
@@ -199,7 +216,7 @@ program
     }
     try {
       const projUrl = peer.url.replace(/\/?$/, '') + '/' + project + '.git';
-      cloneRepo(projUrl, peer.token, opts.dir || project);
+      await cloneRepo(projUrl, peer.token, opts.dir || project);
     } catch (e) {
       console.error('Clone failed:', e.message);
       process.exit(1);

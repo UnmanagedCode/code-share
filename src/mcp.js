@@ -26,18 +26,18 @@ const TOOLS = {
     };
   },
 
-  share({ repoPath, name, leader } = {}) {
+  async share({ repoPath, name, leader } = {}) {
     if (!repoPath) throw new Error('repoPath is required');
     const absPath = path.resolve(repoPath);
     const entryName = name || path.basename(absPath);
     const entry = registry.addProject(absPath, entryName, !!leader);
-    peer.wireConnectedPeers(entryName, entry.path);
+    await peer.wireConnectedPeers(entryName, entry.path);
     return entry;
   },
 
   async sync({ project, remote = 'peer', branch, useRebase = false } = {}) {
     const outcome = await sync(project, { remote, branch, useRebase: !!useRebase });
-    return getSyncState(outcome.project, { remote });
+    return await getSyncState(outcome.project, { remote });
   }
 };
 
