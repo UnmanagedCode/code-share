@@ -19,6 +19,9 @@ let stubApiUrl = null;
 require.cache[ltPath].exports = (opts) => realLt({ ...opts, host: stubApiUrl });
 after(() => { require.cache[ltPath].exports = realLt; });
 
+// Tunnel connections the stub's server allows (its `max_conn_count`).
+const MAX_CONN = 2;
+
 // The floor of the `overrides.localtunnel.axios` range.
 const MIN_AXIOS = '1.20.0';
 
@@ -40,9 +43,11 @@ async function startStub({ failFirst = false } = {}) {
   const live = new Set();
   const pool = [];
   const apiHits = [];
+  const count = { conns: 0 };
 
   const local = http.createServer((req, res) => res.end(`hello ${req.url}`));
   const tsrv = net.createServer((s) => {
+    count.conns++;
     live.add(s);
     pool.push(s);
     s.on('error', () => {});
@@ -67,13 +72,13 @@ async function startStub({ failFirst = false } = {}) {
     if (failFirst && apiHits.length === 1) { res.statusCode = 503; return res.end('unavailable'); }
     if (req.url !== '/?new') { res.statusCode = 404; return res.end(); }
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ id: 't1', ip: '127.0.0.1', port: tsrvPort, max_conn_count: 2, url }));
+    res.end(JSON.stringify({ id: 't1', ip: '127.0.0.1', port: tsrvPort, max_conn_count: MAX_CONN, url }));
   });
   const apiPort = await listen(api);
   stubApiUrl = `http://127.0.0.1:${apiPort}`;
 
   return {
-    live, apiHits, localPort, url,
+    live, apiHits, count, localPort, url,
     async close() {
       for (const s of live) s.destroy();
       await Promise.all([local, tsrv, pub, api].map(closeServer));
@@ -81,11 +86,13 @@ async function startStub({ failFirst = false } = {}) {
   };
 }
 
+// Bounded, so a broken relay fails the test (and its cleanup runs) instead of hanging the run.
 const get = (url) => new Promise((resolve, reject) => {
-  http.get(url, { agent: false }, (res) => {
+  http.get(url, { agent: false, signal: AbortSignal.timeout(5000) }, (res) => {
     let body = '';
     res.on('data', (d) => { body += d; });
     res.on('end', () => resolve({ status: res.statusCode, body }));
+    res.on('error', reject);
   }).on('error', reject);
 });
 
@@ -107,7 +114,7 @@ test('localtunnel resolves the overridden axios', () => {
 });
 
 // Invariant: through the real src/tunnel.js, a localtunnel tunnel resolves to the url its server assigned, relays an
-// HTTP request to the local port, and after stop() holds no socket and does not re-dial.
+// HTTP request to the local port, and after stop() holds no socket and opens no new tunnel connection.
 test('a localtunnel tunnel opens, carries a request, and closes', async () => {
   const stub = await startStub();
   let tunnel;
@@ -116,7 +123,7 @@ test('a localtunnel tunnel opens, carries a request, and closes', async () => {
     tunnel = await startTunnel('localtunnel', stub.localPort);
     assert.equal(tunnel.url, stub.url);
     assert.deepEqual(stub.apiHits, ['/?new']);
-    assert.ok(await eventually(() => stub.live.size === 2), `tunnel sockets: ${stub.live.size}`);
+    assert.ok(await eventually(() => stub.live.size === MAX_CONN), `tunnel sockets: ${stub.live.size}`);
     const res = await get(`${stub.url}/probe`);
     assert.equal(res.status, 200);
     assert.equal(res.body, 'hello /probe');
@@ -124,7 +131,7 @@ test('a localtunnel tunnel opens, carries a request, and closes', async () => {
     tunnel = null;
     assert.ok(await eventually(() => stub.live.size === 0), `tunnel sockets after stop: ${stub.live.size}`);
     await new Promise((r) => setTimeout(r, 300));
-    assert.equal(stub.live.size, 0, 'tunnel re-dialled after stop');
+    assert.equal(stub.count.conns, MAX_CONN, 'tunnel re-dialled after stop');
   } finally {
     if (tunnel) await tunnel.stop();
     await stub.close();
@@ -143,6 +150,8 @@ test('a localtunnel server error is retried, not fatal', async () => {
     await tunnel.stop();
     tunnel = null;
     assert.ok(await eventually(() => stub.live.size === 0), `tunnel sockets after stop: ${stub.live.size}`);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(stub.count.conns, MAX_CONN, 'tunnel re-dialled after stop');
   } finally {
     if (tunnel) await tunnel.stop();
     await stub.close();
