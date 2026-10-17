@@ -252,11 +252,12 @@ npm test      # node --test, then tsc -p frontend, then vitest
 | `tests/clone-staging.test.mjs` | Clones are staged (`src/clone-staging.js`): concurrent clones of one name give one repo and one clean refusal; a taken target is never touched; a failed clone leaves nothing; the startup sweep removes only stale staging directories; only exact staging names (`STAGING_RE`) are hidden from the project list; the Windows rename fallback; a clone error names the target; a dangling symlink at the destination is a 400 |
 | `tests/serve-signal.test.mjs` | Run from a copy of the backend in a temp dir: SIGTERM to `serve` exits promptly and leaves no git process; SIGINT to `sync` and SIGTERM to `clone` kill their git and leave no staging directory; a normal exit with git running does the same; `serve` sweeps stale staging directories at start |
 | `tests/tunnel-check.test.mjs` | `ensureCloudflared` gives up after `CLOUDFLARED_CHECK_TIMEOUT_MS`, against fake `cloudflared` scripts only (no tunnel) |
+| `tests/localtunnel.test.mjs` | `--tunnel localtunnel` on the overridden axios: `package.json`'s `overrides.localtunnel.axios` is `^MIN_AXIOS` and localtunnel resolves an axios 1.x at or above `MIN_AXIOS`; against a loopback stub of the localtunnel server API, a tunnel opens, carries a request and closes without re-dialling, and a server error is retried |
 | `tests/noshell.test.mjs` | Git runs as `spawn('git', argv)` with no shell: a shell-active project name clones without side effect; unsafe branches are refused before any git runs |
 | `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, only `src/lib/api.ts` touches the network and every `api()` path is a literal `api/…`; each sweep is proven against a planted offender |
 | `frontend/src/**/*.test.{ts,tsx}` | Vitest (happy-dom, `fetch` stubbed, no backend): every section's states and actions with their exact request bodies, polling, the QR matrix, hostile content rendered as text, the connect page, `theme-init.js` |
 
-- Tests never start a real tunnel: `tests/_backend.mjs` replaces `src/tunnel.js` before the backend loads, and points `PROJECTS_ROOT` at a temporary directory.
+- Tests never start a real tunnel: `tests/_backend.mjs` replaces `src/tunnel.js` before the backend loads, and points `PROJECTS_ROOT` at a temporary directory. `tests/localtunnel.test.mjs` loads the real `src/tunnel.js` but replaces the `localtunnel` export so its client's `host` is always a loopback stub server.
 - `tests/_isolatedData.mjs` gives a test file an in-memory config and registry and its own `data/serve`, so no test touches the checkout's `data/`.
 - Frontend test specifics: [docs/frontend.md](docs/frontend.md#tests).
 
@@ -352,6 +353,10 @@ code-share can be installed as a code-conductor plugin via the `conductor.plugin
 - The git server's `/control/register` (token-authenticated) refuses a request carrying an `Origin` header, or a `Sec-Fetch-Site` other than `same-origin` or `none`, with a 403, and one without `Content-Type: application/json` with a 415. A browser that cached the token as a Basic credential for that origin could otherwise be made to register a peer from another site; code-share peers send JSON with neither header.
 - The `cs1:` connection string embeds the token — treat it like a password and share only over secure channels.
 - cloudflared must be installed separately (see Prerequisites). The app does not download it.
+- `--tunnel localtunnel` uses the `localtunnel` client, which pins an `axios` with known advisories.
+  - `overrides.localtunnel.axios` in `package.json` replaces it with a patched 1.x. localtunnel makes a single `axios.get` to its server, which 1.x serves unchanged.
+  - An existing install picks this up on its next `npm install`. Keep the override while localtunnel's own pin is vulnerable.
+  - A localtunnel tunnel relays through the third-party `localtunnel.me` server.
 
 ## License
 
