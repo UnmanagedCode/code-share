@@ -31,7 +31,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "happy-dom": "^20.14.6",
+    "happy-dom": "^21.0.4",
     "lucide-react": "^1.57.0",
     "qrcode-generator": "^2.0.4",
     "radix-ui": "^1.8.1",
@@ -46,6 +46,7 @@
     "vitest": "^5.0.5"
   },
   "overrides": {
+    "follow-redirects": "^1.16.1",
     "localtunnel": {
       "axios": "^1.20.0"
     }
