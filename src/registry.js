@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { SERVE_DIR, PROJECTS_ROOT, loadRegistry, saveRegistry } = require('./config');
 const { checkShareName, childPath } = require('./names');
+const { CodedError } = require('./coded-error');
 const { isStagingName } = require('./clone-staging');
 
 // The served link for a project, always directly inside SERVE_DIR.
@@ -28,12 +29,13 @@ function listShared() {
 function addProject(absPath, name, leader = false) {
   const symlinkPath = servePath(name);
   absPath = path.resolve(absPath);
-  if (!fs.existsSync(absPath)) throw new Error(`Path does not exist: ${absPath}`);
-  if (!isGitRepo(absPath)) throw new Error(`Not a git repository: ${absPath}`);
+  if (!fs.existsSync(absPath)) throw new CodedError('NOT_FOUND', `Path does not exist: ${absPath}`, { path: absPath });
+  if (!isGitRepo(absPath)) throw new CodedError('NOT_A_GIT_REPO', `Not a git repository: ${absPath}`, { path: absPath });
 
   const reg = loadRegistry();
-  if (reg.find(p => p.name === name)) throw new Error(`Name already in use: ${name}`);
-  if (reg.find(p => p.path === absPath)) throw new Error(`Repo already shared: ${absPath}`);
+  if (reg.find(p => p.name === name)) throw new CodedError('NAME_IN_USE', `Name already in use: ${name}`, { name });
+  const sharedAs = reg.find(p => p.path === absPath);
+  if (sharedAs) throw new CodedError('ALREADY_SHARED', `Repo already shared: ${absPath}`, { path: absPath, name: sharedAs.name });
 
   // Remove stale symlink if present
   try { fs.unlinkSync(symlinkPath); } catch {}

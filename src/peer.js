@@ -137,8 +137,10 @@ async function wirePeerRemote(projectName, repoPath, pr) {
 // A stored peer entry that cannot be wired (a name outside PEER_NAME_RE, a
 // non-http(s) URL) is skipped with a logged error, so one bad entry never
 // blocks sharing.
-// Returns the list of wired peers ([{ name, url }]) for caller-side logging.
-async function wireConnectedPeers(projectName, repoPath) {
+// Returns the list of wired peers ([{ name, url }]) for caller-side logging. When `skipped` is an array, the
+// name of each skipped entry (null when it is not a string) is pushed onto it. A git failure while wiring a
+// valid peer is rethrown with `e.peer` set to that peer's name.
+async function wireConnectedPeers(projectName, repoPath, skipped = null) {
   const cfg = loadConfig();
   const wired = [];
   for (const pr of cfg.peers || []) {
@@ -148,9 +150,15 @@ async function wireConnectedPeers(projectName, repoPath) {
     } catch (e) {
       // console.error, never process.stderr.write: see the note in connectPeer.
       console.error(`Skipping peer ${JSON.stringify(pr.name)} for ${projectName}: ${e.message}`);
+      if (Array.isArray(skipped)) skipped.push(typeof pr.name === 'string' ? pr.name : null);
       continue;
     }
-    wired.push(await wirePeerRemote(projectName, repoPath, pr));
+    try {
+      wired.push(await wirePeerRemote(projectName, repoPath, pr));
+    } catch (e) {
+      e.peer = pr.name;
+      throw e;
+    }
   }
   return wired;
 }

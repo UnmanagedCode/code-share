@@ -1,8 +1,9 @@
 'use strict';
 // Guards for strings that arrive from a peer (or any caller of the APIs) and
-// end up in a filesystem path or a git argument. Each throws a plain Error
-// whose message is safe to return to the caller.
+// end up in a filesystem path or a git argument. Each throws a CodedError
+// (INVALID_NAME, INVALID_BRANCH, INVALID_URL) whose message is safe to return to the caller.
 const path = require('path');
+const { CodedError } = require('./coded-error');
 
 // C0 controls (NUL included) and DEL.
 const CONTROL = /[\u0000-\u001f\u007f]/;
@@ -12,11 +13,11 @@ const CONTROL = /[\u0000-\u001f\u007f]/;
  * empty, `.`/`..`, a leading `.` or `-`, `/`, `\` and control characters.
  */
 function checkProjectName(name) {
-  if (typeof name !== 'string' || name === '') throw new Error('Invalid project name: empty');
-  if (CONTROL.test(name)) throw new Error('Invalid project name: control character');
-  if (name.includes('/') || name.includes('\\')) throw new Error(`Invalid project name: ${JSON.stringify(name)} contains a path separator`);
-  if (name.startsWith('.')) throw new Error(`Invalid project name: ${JSON.stringify(name)} starts with "."`);
-  if (name.startsWith('-')) throw new Error(`Invalid project name: ${JSON.stringify(name)} starts with "-"`);
+  if (typeof name !== 'string' || name === '') throw new CodedError('INVALID_NAME', 'Invalid project name: empty');
+  if (CONTROL.test(name)) throw new CodedError('INVALID_NAME', 'Invalid project name: control character');
+  if (name.includes('/') || name.includes('\\')) throw new CodedError('INVALID_NAME', `Invalid project name: ${JSON.stringify(name)} contains a path separator`);
+  if (name.startsWith('.')) throw new CodedError('INVALID_NAME', `Invalid project name: ${JSON.stringify(name)} starts with "."`);
+  if (name.startsWith('-')) throw new CodedError('INVALID_NAME', `Invalid project name: ${JSON.stringify(name)} starts with "-"`);
   return name;
 }
 
@@ -26,7 +27,7 @@ const PEER_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 /** A peer name: it becomes a git remote name and a git argument, so a strict charset with no leading `-`. */
 function checkPeerName(name) {
   if (typeof name !== 'string' || !PEER_NAME_RE.test(name) || name.includes('..') || /\.(lock)?$/.test(name)) {
-    throw new Error(`Invalid peer name: ${JSON.stringify(name)} (use letters, digits, ".", "_" or "-", starting with a letter or digit)`);
+    throw new CodedError('INVALID_NAME', `Invalid peer name: ${JSON.stringify(name)} (use letters, digits, ".", "_" or "-", starting with a letter or digit)`);
   }
   return name;
 }
@@ -40,7 +41,7 @@ const BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/;
 function checkBranch(branch) {
   if (typeof branch !== 'string' || !BRANCH_RE.test(branch) || branch.includes('..') || branch.includes('//')
     || branch.includes('/.') || /(\/|\.|\.lock)$/.test(branch)) {
-    throw new Error(`Invalid branch: ${JSON.stringify(branch)} (one plain branch name: letters, digits, ".", "_", "-", "/")`);
+    throw new CodedError('INVALID_BRANCH', `Invalid branch: ${JSON.stringify(branch)} (one plain branch name: letters, digits, ".", "_", "-", "/")`);
   }
   return branch;
 }
@@ -51,9 +52,9 @@ function checkPeerUrl(url) {
   try {
     u = new URL(url);
   } catch {
-    throw new Error(`Invalid peer URL: ${url}`);
+    throw new CodedError('INVALID_URL', `Invalid peer URL: ${url}`);
   }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`Invalid peer URL: ${url} (http or https only)`);
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new CodedError('INVALID_URL', `Invalid peer URL: ${url} (http or https only)`);
   return url;
 }
 
@@ -62,9 +63,9 @@ function checkPeerUrl(url) {
  * containment is required here: a local repo may well be called `.dotfiles`.
  */
 function checkShareName(name) {
-  if (typeof name !== 'string' || name === '') throw new Error('Invalid project name: empty');
-  if (CONTROL.test(name)) throw new Error('Invalid project name: control character');
-  if (name.includes('/') || name.includes('\\')) throw new Error(`Invalid project name: ${JSON.stringify(name)} contains a path separator`);
+  if (typeof name !== 'string' || name === '') throw new CodedError('INVALID_NAME', 'Invalid project name: empty');
+  if (CONTROL.test(name)) throw new CodedError('INVALID_NAME', 'Invalid project name: control character');
+  if (name.includes('/') || name.includes('\\')) throw new CodedError('INVALID_NAME', `Invalid project name: ${JSON.stringify(name)} contains a path separator`);
   return name;
 }
 

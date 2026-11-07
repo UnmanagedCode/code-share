@@ -4,13 +4,33 @@ const { checkPeerName, checkBranch } = require('./names');
 const { runGit } = require('./git');
 const { peerRequest } = require('./peer-http');
 const { LIMITS } = require('./limits');
+const { CodedError } = require('./coded-error');
 
 const git = (args, cwd) => runGit(args, { cwd });
 
+// The unmerged paths, and whether git's stdout hit the GIT_OUTPUT_MAX_CHARS ceiling (the kept tail may then
+// start with a partial path, which is dropped).
 async function getConflictingFiles(repoPath) {
   const r = await git(['diff', '--name-only', '--diff-filter=U'], repoPath);
-  return r.stdout.split('\n').map(l => l.trim()).filter(Boolean);
+  const truncated = r.stdout.length >= LIMITS.GIT_OUTPUT_MAX_CHARS;
+  const lines = r.stdout.split('\n');
+  if (truncated) lines.shift();
+  return { files: lines.map(l => l.trim()).filter(Boolean), truncated };
 }
+
+// The SYNC_CONFLICT refusal; the caller has already aborted the merge or rebase.
+function conflictError(head, proj, remote, mode, { files, truncated }) {
+  const list = files.map(f => '  ' + f).join('\n') || '  (see git status for details)';
+  const note = truncated ? '\n  … (earlier conflicting files not shown)' : '';
+  return new CodedError(
+    'SYNC_CONFLICT',
+    `${head} Aborted cleanly. Conflicting files:\n${list}${note}`,
+    { project: proj.name, remote, mode, conflictingFiles: files, conflictingFilesTruncated: truncated, aborted: true },
+    `${head} Aborted cleanly; ${files.length} conflicting file(s) are listed in details.conflictingFiles.`,
+  );
+}
+
+const notFound = (name, reg) => new CodedError('NOT_FOUND', `Project not found in registry: ${name}`, { project: name, shared: reg.map(p => p.name) });
 
 // Try to fetch the peer's current leader flag for this project from their live /control/status.
 // Falls back to the value stored in the registry if the peer is unreachable or slow.
@@ -39,13 +59,15 @@ async function sync(projectName, opts = {}) {
   let proj;
   if (projectName) {
     proj = reg.find(p => p.name === projectName);
-    if (!proj) throw new Error(`Project not found in registry: ${projectName}`);
+    if (!proj) throw notFound(projectName, reg);
   } else if (reg.length === 1) {
     proj = reg[0];
   } else if (reg.length === 0) {
-    throw new Error('No projects are shared. Use `share` to add one first.');
+    throw new CodedError('NOTHING_SHARED', 'No projects are shared. Use `share` to add one first.');
   } else {
-    throw new Error(`Multiple projects found. Specify a project name: ${reg.map(p => p.name).join(', ')}`);
+    const names = reg.map(p => p.name);
+    throw new CodedError('PROJECT_REQUIRED', `Multiple projects found. Specify a project name: ${names.join(', ')}`, { shared: names },
+      'Multiple projects are shared; name one in `project` (the names are in details.shared).');
   }
 
   const repoPath = proj.path;
@@ -55,7 +77,7 @@ async function sync(projectName, opts = {}) {
   console.log(`Fetching from ${remote}...`);
   const fetchResult = await git(['fetch', '--', remote, remoteBranch], repoPath);
   if (fetchResult.code !== 0) {
-    throw new Error(`git fetch failed:\n${fetchResult.stderr}`);
+    throw new CodedError('FETCH_FAILED', `git fetch failed:\n${fetchResult.stderr}`, { project: proj.name, remote });
   }
 
   // Step 2: determine sync mode by comparing both sides' leader flags
@@ -64,14 +86,16 @@ async function sync(projectName, opts = {}) {
   // isFollower: I am not the leader and the peer is — fast-forward to their tip
   const isFollower = !myLeader && peerLeader;
 
+  let mode;
   if (useRebase) {
     console.log('Rebasing onto FETCH_HEAD...');
     const r = await git(['rebase', 'FETCH_HEAD'], repoPath);
     if (r.code !== 0) {
       const conflicts = await getConflictingFiles(repoPath);
       await git(['rebase', '--abort'], repoPath);
-      throw new Error(`Rebase conflict. Aborted cleanly. Conflicting files:\n${conflicts.map(f => '  ' + f).join('\n') || '  (see git status for details)'}`);
+      throw conflictError('Rebase conflict.', proj, remote, 'rebase', conflicts);
     }
+    mode = 'rebase';
   } else if (isFollower) {
     // Fast-forward to leader's tip; rebase local commits on top if needed
     console.log('Follower fast-forward sync...');
@@ -82,18 +106,23 @@ async function sync(projectName, opts = {}) {
       if (rebaseResult.code !== 0) {
         const conflicts = await getConflictingFiles(repoPath);
         await git(['rebase', '--abort'], repoPath);
-        throw new Error(`Rebase conflict on follower sync. Aborted cleanly. Conflicting files:\n${conflicts.map(f => '  ' + f).join('\n') || '  (see git status for details)'}`);
+        throw conflictError('Rebase conflict on follower sync.', proj, remote, 'follower-rebase', conflicts);
       }
+      mode = 'follower-rebase';
+    } else {
+      mode = 'fast-forward';
     }
   } else {
     // Symmetric (both same flag) or leader ingesting follower — merge --no-ff
-    const label = (myLeader && !peerLeader) ? 'Leader ingesting follower' : 'Symmetric merge';
+    const ingest = myLeader && !peerLeader;
+    mode = ingest ? 'leader-ingest' : 'symmetric-merge';
+    const label = ingest ? 'Leader ingesting follower' : 'Symmetric merge';
     console.log(`${label} (merge --no-ff)...`);
     const mergeResult = await git(['merge', '--no-ff', '-m', 'code-share: sync merge', 'FETCH_HEAD'], repoPath);
     if (mergeResult.code !== 0) {
       const conflicts = await getConflictingFiles(repoPath);
       await git(['merge', '--abort'], repoPath);
-      throw new Error(`Merge conflict. Aborted cleanly. Conflicting files:\n${conflicts.map(f => '  ' + f).join('\n') || '  (see git status for details)'}`);
+      throw conflictError('Merge conflict.', proj, remote, mode, conflicts);
     }
   }
 
@@ -104,7 +133,7 @@ async function sync(projectName, opts = {}) {
     console.log('Recent commits:\n' + log.stdout.trim().split('\n').map(l => '  ' + l).join('\n'));
   }
 
-  return { project: proj.name };
+  return { project: proj.name, mode };
 }
 
 // Read-only divergence check: fetches remote then counts ahead/behind commits.
@@ -115,13 +144,13 @@ async function getSyncState(projectName, opts = {}) {
 
   const reg = loadRegistry();
   const proj = reg.find(p => p.name === projectName);
-  if (!proj) throw new Error(`Project not found in registry: ${projectName}`);
+  if (!proj) throw notFound(projectName, reg);
 
   const repoPath = proj.path;
 
   const fetchResult = await git(['fetch', '--', remote], repoPath);
   if (fetchResult.code !== 0) {
-    throw new Error(`git fetch failed: ${fetchResult.stderr.trim()}`);
+    throw new CodedError('FETCH_FAILED', `git fetch failed: ${fetchResult.stderr.trim()}`, { project: proj.name, remote });
   }
 
   const behindResult = await git(['rev-list', '--count', 'HEAD..FETCH_HEAD'], repoPath);
