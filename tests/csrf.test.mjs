@@ -62,7 +62,10 @@ test('MCP still works with the content type code-conductor sends', async () => {
   const body = JSON.stringify({ tool: 'status', arguments: {}, caller: { sessionId: null, project: null } });
   const r = await post('/api/mcp', { 'content-type': 'application/json' }, body);
   assert.equal(r.status, 200);
-  assert.ok('result' in JSON.parse(r.body));
+  assert.ok('text' in JSON.parse(r.body));
+  const json = await post('/api/mcp', { 'content-type': 'application/json' }, JSON.stringify({ ...JSON.parse(body), format: 'json' }));
+  assert.equal(json.status, 200);
+  assert.ok('structured' in JSON.parse(json.body));
   assert.equal((await post('/api/mcp', { 'content-type': 'text/plain' }, body)).status, 415);
 });
 
