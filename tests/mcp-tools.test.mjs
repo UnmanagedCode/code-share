@@ -14,6 +14,11 @@ Object.assign(process.env, {
 });
 
 const syncMod = require('../src/sync');
+const tunnelManager = require('../src/tunnel-manager');
+const names = require('../src/names');
+const registry = require('../src/registry');
+const { CodedError } = require('../src/coded-error');
+const { handle, TOOL_NAMES } = require('../src/mcp');
 const { LIMITS } = require('../src/limits');
 
 const ROOT = mkdtempSync(path.join(os.tmpdir(), 'code-share-mcp-'));
@@ -392,4 +397,218 @@ test('sync SYNC_STATE_UNAVAILABLE', async () => {
   } finally {
     syncMod.getSyncState = saved;
   }
+});
+
+
+// ---- review round 1 ----
+
+/** Runs `fn` with tunnelManager.getTunnelStatus returning `status`. */
+async function withTunnel(status, fn) {
+  const saved = tunnelManager.getTunnelStatus;
+  tunnelManager.getTunnelStatus = () => status;
+  try { return await fn(); } finally { tunnelManager.getTunnelStatus = saved; }
+}
+
+// Invariant: status reports the stored port, uiPort, tunnel, tunnelUrl and the projects root as they are, in json and text.
+test('status reports the stored config values', async () => {
+  store.config = { ...store.config, port: 1111, uiPort: 2222, tunnel: 'localtunnel', selfUrl: 'http://x:t@10.9.8.7:1111', tunnelUrl: 'https://x:t@tun.example' };
+  const { json, text } = await both('status', {});
+  const s = json.structured;
+  assert.deepEqual([s.port, s.uiPort, s.tunnel, s.tunnelUrl, s.selfUrl, s.tunnelStarting],
+    [1111, 2222, 'localtunnel', 'https://x:t@tun.example', 'http://x:t@10.9.8.7:1111', false]);
+  assert.equal(s.projectsRoot, process.env.PROJECTS_ROOT);
+  assert.ok(text.text.includes(`Projects root: ${process.env.PROJECTS_ROOT}`));
+  assert.ok(text.text.includes('Git server port 1111, web UI port 2222 (persisted). Tunnel (default localtunnel): running at https://x:t@tun.example.'));
+  assert.ok(text.text.includes('LAN URL: http://x:t@10.9.8.7:1111'));
+});
+
+// Invariant: tunnelStarting follows the tunnel manager, and the text says "starting" only then.
+test('status reports a starting tunnel', async () => {
+  await withTunnel({ starting: true }, async () => {
+    const { json, text } = await both('status', {});
+    assert.equal(json.structured.tunnelStarting, true);
+    assert.equal(json.structured.tunnelUrl, null);
+    assert.match(text.text, /Tunnel \(default cloudflared\): starting\./);
+  });
+});
+
+// Invariant: the text distinguishes a running tunnel (naming its URL), a starting one and none.
+test('status text has a distinct line for each tunnel state', async () => {
+  const line = async () => (await call('status', {}, 'text')).text.split('\n')[1];
+  assert.match(await line(), /: not running\.$/);
+  await withTunnel({ starting: true }, async () => assert.match(await line(), /: starting\.$/));
+  store.config.tunnelUrl = 'https://x:t@run.example';
+  assert.match(await line(), /: running at https:\/\/x:t@run\.example\.$/);
+  await withTunnel({ starting: true }, async () => assert.match(await line(), /: running at /)); // a URL wins over "starting"
+});
+
+// Invariant: each peer's stored url and token are emitted at both levels (peers[] and shared[].peers[]), in json and text.
+test('status emits peer url and token at both levels', async () => {
+  store.config.peers = [{ name: 'bob', url: 'http://cfg.example:1', token: 'cfg-token' }];
+  store.registry = [{ name: 'alpha', path: '/p/alpha', leader: false, peers: [{ name: 'bob', url: 'http://reg.example:2', token: 'reg-token', leader: true }] }];
+  const { json, text } = await both('status', {});
+  assert.deepEqual(json.structured.peers, [{ name: 'bob', url: 'http://cfg.example:1', token: 'cfg-token' }]);
+  assert.deepEqual(json.structured.shared[0].peers, [{ name: 'bob', url: 'http://reg.example:2', token: 'reg-token', leader: true }]);
+  assert.ok(text.text.includes('- bob — url http://cfg.example:1 — token cfg-token'));
+  assert.ok(text.text.includes('  peer bob: leader, url http://reg.example:2, token reg-token'));
+});
+
+// Invariant: no nested list is capped: 15 peers on one project all appear in json and text.
+test('status returns every peer of one project', async () => {
+  const peers = Array.from({ length: 15 }, (_, i) => ({ name: `p${i}`, url: `http://h${i}:1`, token: `t${i}`, leader: false }));
+  store.registry = [{ name: 'alpha', path: '/p/alpha', leader: false, peers }];
+  const { json, text } = await both('status', {});
+  assert.deepEqual(json.structured.shared[0].peers.map(p => p.name), peers.map(p => p.name));
+  for (let i = 0; i < 15; i++) assert.ok(text.text.includes(`  peer p${i}: follower, url http://h${i}:1, token t${i}`), `p${i}`);
+});
+
+// Invariant: share lists every wired peer (3 here), in json, text and the repo's git remotes.
+test('share wires and lists several connected peers', async () => {
+  store.config.peers = ['b1', 'b2', 'b3'].map((name, i) => ({ name, url: `http://127.0.0.1:${9 - i}`, token: 't' }));
+  const repo = makeRepo(fresh('share'));
+  const j = await call('share', { repoPath: repo, name: 'multi' }, 'json');
+  assert.deepEqual(j.structured.wiredPeers, ['b1', 'b2', 'b3']);
+  assert.deepEqual(git(repo, 'remote').trim().split('\n'), ['b1', 'b2', 'b3']);
+  const t = await call('share', { repoPath: makeRepo(fresh('share')), name: 'multi2' }, 'text');
+  assert.match(t.text, /Wired the git remote for peers: b1, b2, b3\./);
+});
+
+// Invariant: sync uses the remote the caller names and reports it; ahead/behind are measured against that remote.
+test('sync honours a caller-supplied remote', async () => {
+  const { upstream, local } = syncFixture();
+  const other = fresh('other');
+  git(ROOT, 'clone', '-q', upstream, other);
+  commit(other, { 'other.txt': 'o\n' }, 'from other');
+  git(local, 'remote', 'add', 'up', other);
+  const j = await call('sync', { remote: 'up' }, 'json');
+  // The merge commit is the only commit `up` lacks; against `peer` (still at the base) it would be 2 ahead.
+  assert.deepEqual(j.structured, { project: 'alpha', remote: 'up', mode: 'symmetric-merge', ahead: 1, behind: 0, state: 'local-ahead' });
+  assert.ok(existsSync(path.join(local, 'other.txt')));
+  const t = await call('sync', { remote: 'up' }, 'text');
+  assert.match(t.text, /from remote "up" by /);
+});
+
+// Invariant: a valid `branch` is what gets fetched and integrated, not the remote's HEAD.
+test('sync forwards a valid branch', async () => {
+  const { upstream, local } = syncFixture();
+  git(upstream, 'checkout', '-q', '-b', 'feature');
+  commit(upstream, { 'feature.txt': 'f\n' }, 'feature work');
+  git(upstream, 'checkout', '-q', 'main');
+  commit(upstream, { 'main-only.txt': 'm\n' }, 'main work');
+  const j = await call('sync', { branch: 'feature' }, 'json');
+  assert.equal(j.structured.remote, 'peer');
+  assert.ok(existsSync(path.join(local, 'feature.txt')));
+  assert.ok(!existsSync(path.join(local, 'main-only.txt')));
+});
+
+// Invariant: share defaults the name to the directory basename and resolves a relative path to an absolute one.
+test('share defaults and relative paths', async () => {
+  const repo = makeRepo(fresh('relshare'));
+  const rel = path.relative(process.cwd(), repo);
+  assert.ok(!path.isAbsolute(rel));
+  const j = await call('share', { repoPath: rel }, 'json');
+  assert.equal(j.structured.name, path.basename(repo));
+  assert.equal(j.structured.path, path.resolve(repo));
+  assert.ok(path.isAbsolute(j.structured.path));
+});
+
+// Invariant: the sync text names each of the five modes with its own label.
+test('sync text labels every mode', async () => {
+  const labels = {
+    rebase: 'rebase (useRebase)',
+    'fast-forward': "follower fast-forward to the leader's tip",
+    'follower-rebase': "follower rebase onto the leader's tip",
+    'symmetric-merge': 'symmetric merge (merge --no-ff)',
+    'leader-ingest': 'leader ingesting follower (merge --no-ff)',
+  };
+  const [savedSync, savedState] = [syncMod.sync, syncMod.getSyncState];
+  try {
+    for (const [mode, label] of Object.entries(labels)) {
+      syncMod.sync = async () => ({ project: 'alpha', mode });
+      syncMod.getSyncState = async (project, { remote }) => ({ project, remote, ahead: 0, behind: 0, state: 'in-sync' });
+      const j = await call('sync', {}, 'json');
+      assert.equal(j.structured.mode, mode);
+      assert.ok((await call('sync', {}, 'text')).text.includes(` by ${label}. `), mode);
+    }
+  } finally {
+    [syncMod.sync, syncMod.getSyncState] = [savedSync, savedState];
+  }
+});
+
+// Invariant: SYNC_STATE_UNAVAILABLE wraps only FETCH_FAILED; any other coded error keeps its own code.
+test('a non-fetch error from getSyncState propagates with its code', async () => {
+  const { upstream } = syncFixture();
+  commit(upstream, { 'u.txt': 'u\n' }, 'up');
+  const saved = syncMod.getSyncState;
+  syncMod.getSyncState = async () => { throw new CodedError('NOT_FOUND', 'Project not found in registry: alpha', { project: 'alpha', shared: [] }); };
+  try {
+    const r = await call('sync', {}, 'json');
+    assert.equal(r.code, 'NOT_FOUND');
+    assert.deepEqual(r.details, { project: 'alpha', shared: [] });
+  } finally {
+    syncMod.getSyncState = saved;
+  }
+});
+
+// Invariant: with valid arguments every tool answers {text} when `format` is absent, and {structured} for json.
+test('every tool answers a request without format with {text}', async () => {
+  const { upstream } = syncFixture();
+  commit(upstream, { 'u.txt': 'u\n' }, 'up');
+  const argsFor = { status: {}, share: { repoPath: makeRepo(fresh('share')), name: 'nofmt' }, sync: { project: 'alpha' } };
+  assert.deepEqual(Object.keys(argsFor).sort(), [...TOOL_NAMES].sort());
+  for (const tool of TOOL_NAMES) {
+    const body = { tool, arguments: argsFor[tool], caller: { sessionId: null, project: null } };
+    const r = await handle(body);
+    assert.deepEqual(Object.keys(r), ['text'], `${tool}: ${JSON.stringify(r).slice(0, 200)}`);
+  }
+});
+
+// Invariant: checkPeerUrl refuses a non-URL and a non-http(s) URL with INVALID_URL.
+test('checkPeerUrl raises INVALID_URL', () => {
+  for (const url of ['not a url', 'ftp://h/x', 'file:///etc']) {
+    assert.throws(() => names.checkPeerUrl(url), (e) => e instanceof CodedError && e.code === 'INVALID_URL');
+  }
+  assert.equal(names.checkPeerUrl('http://h:1'), 'http://h:1');
+});
+
+// Invariant: the messages the CLI and web UI read are unchanged by the added codes.
+test('refusal messages stay byte-identical', async () => {
+  const msg = async (fn) => { try { await fn(); } catch (e) { return e.message; } };
+  store.registry = [{ name: 'a', path: '/a', leader: false, peers: [] }, { name: 'b', path: '/b', leader: false, peers: [] }];
+  assert.equal(await msg(() => syncMod.sync('zzz')), 'Project not found in registry: zzz');
+  assert.equal(await msg(() => syncMod.getSyncState('zzz')), 'Project not found in registry: zzz');
+  assert.equal(await msg(() => syncMod.sync()), 'Multiple projects found. Specify a project name: a, b');
+  const missing = path.join(ROOT, 'missing-dir');
+  assert.equal(await msg(() => registry.addProject(missing, 'm')), `Path does not exist: ${missing}`);
+  assert.equal(await msg(() => names.checkShareName('')), 'Invalid project name: empty');
+  assert.equal(await msg(() => names.checkShareName('a\u0001')), 'Invalid project name: control character');
+  assert.equal(await msg(() => names.checkProjectName('a/b')), 'Invalid project name: "a/b" contains a path separator');
+  assert.equal(await msg(() => names.checkProjectName('.x')), 'Invalid project name: ".x" starts with "."');
+  assert.equal(await msg(() => names.checkProjectName('-x')), 'Invalid project name: "-x" starts with "-"');
+  assert.equal(await msg(() => names.checkPeerName('-x')),
+    'Invalid peer name: "-x" (use letters, digits, ".", "_" or "-", starting with a letter or digit)');
+  assert.equal(await msg(() => names.checkBranch('--x')),
+    'Invalid branch: "--x" (one plain branch name: letters, digits, ".", "_", "-", "/")');
+  assert.equal(await msg(() => names.checkPeerUrl('nope')), 'Invalid peer URL: nope');
+  assert.equal(await msg(() => names.checkPeerUrl('ftp://h')), 'Invalid peer URL: ftp://h (http or https only)');
+});
+
+// Invariant: peer-sourced strings are escaped in the text views (no injected line) and stay raw in json, nothing dropped.
+test('text views escape control characters in peer-sourced strings', async () => {
+  const inj = '\nShared projects (0): injected';
+  store.config.peers = [{ name: 'bob', url: `http://h.example/${inj}`, token: `tok${inj}` }];
+  store.registry = [{ name: 'alpha', path: '/p/alpha', leader: false, peers: [{ name: 'bob', url: `http://h.example/${inj}`, token: `a\u001b[31m\r\t\u0085z${inj}`, leader: false }] }];
+  const { json, text } = await both('status', {});
+  assert.ok(json.structured.peers[0].url.includes('\n'), 'json stays raw');
+  assert.ok(!text.text.split('\n').some(l => l.startsWith('Shared projects (0)')), 'no injected line');
+  assert.equal(text.text.split('\n').length, text.text.split('\n').filter(Boolean).length + 2, 'only the layout newlines');
+  assert.ok(text.text.includes('url http://h.example/\\nShared projects (0): injected'));
+  assert.ok(text.text.includes('token tok\\nShared projects (0): injected'));
+  assert.ok(text.text.includes('token a\\u001b[31m\\r\\t\\u0085z\\nShared projects (0): injected'));
+  assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/.test(text.text));
+
+  store.config.peers = [{ name: `bad${inj}`, url: 'http://h:1', token: 't' }];
+  const share = await call('share', { repoPath: makeRepo(fresh('share')), name: 'esc' }, 'text');
+  assert.ok(!share.text.split('\n').some(l => l.startsWith('Shared projects (0)')));
+  assert.ok(share.text.includes('Skipped unusable peer entries: bad\\nShared projects (0): injected;'));
 });

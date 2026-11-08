@@ -5,11 +5,18 @@ import { request, require } from './_backend.mjs';
 import './_isolatedData.mjs';
 import { call } from './_mcpCall.mjs';
 
-const { handle, TOOL_NAMES } = require('../src/mcp');
+const { handle } = require('../src/mcp');
 const registry = require('../src/registry');
 const { startWebUI } = require('../src/webui');
 
 const caller = { sessionId: null, project: null };
+
+// Invariant: the format is checked before the tool, so a bad format with an unknown tool is FORMAT_UNKNOWN.
+test('FORMAT_UNKNOWN wins over TOOL_UNKNOWN', async () => {
+  assert.equal((await handle({ tool: 'nope', format: 'xml' })).code, 'FORMAT_UNKNOWN');
+  assert.equal((await handle({ tool: 'nope', arguments: 5, format: null })).code, 'FORMAT_UNKNOWN');
+  assert.equal((await handle({ tool: 'nope', arguments: 5 })).code, 'TOOL_UNKNOWN');
+});
 
 // Invariant: any unrecognised format is refused with FORMAT_UNKNOWN and a bounded message, whatever its type or depth.
 test('FORMAT_UNKNOWN for every non-text/json format, with a bounded reply', async () => {
@@ -22,16 +29,6 @@ test('FORMAT_UNKNOWN for every non-text/json format, with a bounded reply', asyn
     assert.deepEqual(Object.keys(r).sort(), ['code', 'error']);
     assert.ok(r.error.length < 200, r.error.length);
   }
-});
-
-// Invariant: a request without `format` is a text request, for every tool.
-test('no format answers {text} for every tool', async () => {
-  for (const tool of TOOL_NAMES) {
-    const r = await call(tool, {});
-    if (!('error' in r)) assert.deepEqual(Object.keys(r), ['text']);
-  }
-  const r = await call('status', {});
-  assert.ok('text' in r);
 });
 
 // Invariant: only own tool names dispatch; prototype keys and non-strings are TOOL_UNKNOWN in both formats.
@@ -49,7 +46,7 @@ test('TOOL_UNKNOWN for unknown, inherited and non-string tools', async () => {
 
 // Invariant: `arguments` must be an object (null/absent mean none).
 test('BAD_REQUEST for non-object arguments', async () => {
-  for (const args of ['x', [1], 5, true]) {
+  for (const args of ['x', [1], 5, true, 0, false, '']) {
     const r = await handle({ tool: 'status', arguments: args, caller });
     assert.equal(r.code, 'BAD_REQUEST', JSON.stringify(args));
     assert.equal(r.error, 'arguments must be an object');

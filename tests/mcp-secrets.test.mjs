@@ -132,3 +132,88 @@ test('FETCH_FAILED and PEER_WIRING_FAILED messages add nothing to today\'s', asy
   assert.equal(w.error, `Shared wired, but wiring the git remote for peer "bob" failed: ${gitMsg}`);
   assert.ok(registry.findProject('wired'));
 });
+
+
+// Invariant: every refusal code the tools can raise, driven with the sentinels seeded, has no sentinel in `details`,
+// and none in its message beyond the sentinels today's message for that path carried.
+test('every refusal carries no secret in details and nothing new in its message', async () => {
+  scenarioA();
+  store.config.peers = [{ name: 'bob', url: 'http://127.0.0.1:9', token: PEER_TOKEN }];
+  const { CodedError } = require('../src/coded-error');
+  const { handle } = require('../src/mcp');
+  const credRemote = `http://x:${PEER_TOKEN}@127.0.0.1:9/alpha.git`;
+  const refusals = []; // [reply, legacy message]
+  const run = async (tool, args, legacy = '') => refusals.push([await call(tool, args, 'json'), legacy]);
+  const msgOf = async (fn) => { try { await fn(); } catch (e) { return e.message; } return ''; };
+
+  // dispatcher
+  refusals.push([await handle({ tool: 'status', format: 'xml' }), '']);
+  refusals.push([await handle({ tool: 'nope' }), '']);
+  refusals.push([await handle({ tool: 'status', arguments: 5 }), '']);
+  // share
+  const repo = makeRepo();
+  await run('share', {});
+  await run('share', { repoPath: '/no/where' });
+  await run('share', { repoPath: repo, name: 'a/b' });
+  const plain = path.join(ROOT, 'plain'); mkdirSync(plain);
+  await run('share', { repoPath: plain });
+  store.config.peers = []; store.registry = [];
+  await call('share', { repoPath: repo, name: 'taken' }, 'json');
+  await run('share', { repoPath: makeRepo(), name: 'taken' });
+  await run('share', { repoPath: repo, name: 'other' });
+  store.config.peers = [{ name: 'bob', url: 'http://127.0.0.1:9', token: PEER_TOKEN }];
+  const locked = makeRepo();
+  writeFileSync(path.join(locked, '.git', 'config.lock'), '');
+  const peerWire = require('../src/peer');
+  const wireMsg = await msgOf(() => peerWire.wirePeerRemote('locked', locked, store.config.peers[0]));
+  await run('share', { repoPath: locked, name: 'locked' }, wireMsg);
+  const saved = registry.addProject;
+  const err = console.error; console.error = () => {};
+  registry.addProject = () => { throw new Error('boom'); };
+  try { await run('share', { repoPath: makeRepo() }, 'boom'); } finally { registry.addProject = saved; console.error = err; }
+  // sync
+  store.registry = [];
+  await run('sync', {});
+  await run('sync', { remote: '-x' });
+  await run('sync', { branch: '--x' });
+  await run('sync', { useRebase: 1 });
+  store.registry = [{ name: 'a', path: '/a', leader: false, peers: [] }, { name: 'b', path: '/b', leader: false, peers: [] }];
+  await run('sync', {});
+  await run('sync', { project: 'zzz' });
+  // FETCH_FAILED against the credentialed remote
+  const local = makeRepo();
+  git(local, 'remote', 'add', 'peer', credRemote);
+  store.registry = [{ name: 'alpha', path: local, leader: false, peers: [{ name: 'peer', url: bobUrl, token: PEER_TOKEN, leader: false }] }];
+  const fetchMsg = await msgOf(() => syncMod.sync('alpha'));
+  await run('sync', {}, fetchMsg);
+  // SYNC_CONFLICT
+  const up = makeRepo();
+  const loc = path.join(ROOT, 'conflict-local');
+  git(ROOT, 'clone', '-q', up, loc);
+  git(loc, 'remote', 'add', 'peer', up);
+  for (const [d, t] of [[up, 'u'], [loc, 'l']]) { writeFileSync(path.join(d, 'a.txt'), `${t}\n`); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', t); }
+  store.registry = [{ name: 'alpha', path: loc, leader: false, peers: [{ name: 'peer', url: bobUrl, token: PEER_TOKEN, leader: false }] }];
+  const conflictMsg = await msgOf(() => syncMod.sync('alpha'));
+  await run('sync', {}, conflictMsg);
+  // SYNC_STATE_UNAVAILABLE
+  const up2 = makeRepo();
+  const loc2 = path.join(ROOT, 'state-local');
+  git(ROOT, 'clone', '-q', up2, loc2);
+  git(loc2, 'remote', 'add', 'peer', up2);
+  writeFileSync(path.join(up2, 'n.txt'), 'n\n'); git(up2, 'add', '-A'); git(up2, 'commit', '-q', '-m', 'n');
+  store.registry = [{ name: 'alpha', path: loc2, leader: false, peers: [{ name: 'peer', url: bobUrl, token: PEER_TOKEN, leader: false }] }];
+  const savedState = syncMod.getSyncState;
+  const stateMsg = 'git fetch failed: gone';
+  syncMod.getSyncState = async () => { throw new CodedError('FETCH_FAILED', stateMsg, { project: 'alpha', remote: 'peer' }); };
+  try { await run('sync', {}, stateMsg); } finally { syncMod.getSyncState = savedState; }
+
+  const codes = new Set(refusals.map(([r]) => r.code));
+  for (const code of ['BAD_REQUEST', 'FORMAT_UNKNOWN', 'TOOL_UNKNOWN', 'INTERNAL', 'INVALID_NAME', 'INVALID_BRANCH', 'NOT_FOUND', 'NOT_A_GIT_REPO',
+    'NAME_IN_USE', 'ALREADY_SHARED', 'PEER_WIRING_FAILED', 'NOTHING_SHARED', 'PROJECT_REQUIRED', 'FETCH_FAILED', 'SYNC_CONFLICT', 'SYNC_STATE_UNAVAILABLE']) {
+    assert.ok(codes.has(code), `driven: ${code} (got ${[...codes]})`);
+  }
+  for (const [r, legacy] of refusals) {
+    assert.deepEqual(found(r.details ?? {}), [], `details of ${r.code}`);
+    for (const sentinel of found(r.error)) assert.ok(found(legacy).includes(sentinel), `${r.code} message adds ${sentinel}`);
+  }
+});

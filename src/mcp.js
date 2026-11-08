@@ -117,7 +117,12 @@ const MODE_LABELS = {
   'leader-ingest': 'leader ingesting follower (merge --no-ff)',
 };
 
-const orNone = (v) => (v === null ? '(none)' : v);
+// Text views only: C0/C1 controls and the Unicode line separators are shown as visible escapes, so a
+// peer-sourced string can never start a line of its own. Nothing is dropped; the json view stays raw.
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+const ESCAPES = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+const esc = (v) => String(v).replace(CONTROLS, (c) => ESCAPES[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const orNone = (v) => (v === null ? '(none)' : esc(v));
 
 function stateSentence({ state, ahead, behind }) {
   switch (state) {
@@ -131,12 +136,12 @@ function stateSentence({ state, ahead, behind }) {
 // Prose views of the data objects above. Every list is printed in full.
 const TEXT_VIEWS = {
   status(d) {
-    const tunnel = d.tunnelUrl !== null ? `running at ${d.tunnelUrl}` : d.tunnelStarting ? 'starting' : 'not running';
+    const tunnel = d.tunnelUrl !== null ? `running at ${esc(d.tunnelUrl)}` : d.tunnelStarting ? 'starting' : 'not running';
     const lines = [
       'code-share status',
-      `Git server port ${d.port ?? '(unset)'}, web UI port ${d.uiPort ?? '(unset)'} (persisted). Tunnel (default ${d.tunnel ?? '(unset)'}): ${tunnel}.`,
-      `LAN URL: ${d.selfUrl ?? '(not serving yet)'}`,
-      `Projects root: ${d.projectsRoot}`,
+      `Git server port ${d.port === null ? '(unset)' : esc(d.port)}, web UI port ${d.uiPort === null ? '(unset)' : esc(d.uiPort)} (persisted). Tunnel (default ${d.tunnel === null ? '(unset)' : esc(d.tunnel)}): ${tunnel}.`,
+      `LAN URL: ${d.selfUrl === null ? '(not serving yet)' : esc(d.selfUrl)}`,
+      `Projects root: ${esc(d.projectsRoot)}`,
       '',
     ];
     if (d.shared.length === 0) {
@@ -144,9 +149,9 @@ const TEXT_VIEWS = {
     } else {
       lines.push(`Shared projects (${d.shared.length}):`);
       for (const p of d.shared) {
-        lines.push(`- ${p.name} — ${p.leader ? 'leader' : 'follower'} — ${p.path}${p.peers.length === 0 ? ' (no peers wired)' : ''}`);
+        lines.push(`- ${orNone(p.name)} — ${p.leader ? 'leader' : 'follower'} — ${orNone(p.path)}${p.peers.length === 0 ? ' (no peers wired)' : ''}`);
         for (const q of p.peers) {
-          lines.push(`  peer ${q.name}: ${q.leader ? 'leader' : 'follower'}, url ${orNone(q.url)}, token ${orNone(q.token)}`);
+          lines.push(`  peer ${orNone(q.name)}: ${q.leader ? 'leader' : 'follower'}, url ${orNone(q.url)}, token ${orNone(q.token)}`);
         }
       }
     }
@@ -155,24 +160,24 @@ const TEXT_VIEWS = {
       lines.push('No peers are connected.');
     } else {
       lines.push(`Connected peers (${d.peers.length}):`);
-      for (const q of d.peers) lines.push(`- ${q.name} — url ${orNone(q.url)} — token ${orNone(q.token)}`);
+      for (const q of d.peers) lines.push(`- ${orNone(q.name)} — url ${orNone(q.url)} — token ${orNone(q.token)}`);
     }
     return lines.join('\n');
   },
 
   share(d) {
-    const lines = [`Shared ${d.name} (${d.leader ? 'leader' : 'follower'}) from ${d.path}.`];
+    const lines = [`Shared ${esc(d.name)} (${d.leader ? 'leader' : 'follower'}) from ${esc(d.path)}.`];
     lines.push(d.wiredPeers.length > 0
-      ? `Wired the git remote for peers: ${d.wiredPeers.join(', ')}.`
+      ? `Wired the git remote for peers: ${d.wiredPeers.map(esc).join(', ')}.`
       : 'No peers are connected, so no peer remotes were wired.');
     if (d.skippedPeers.length > 0) {
-      lines.push(`Skipped unusable peer entries: ${d.skippedPeers.map(n => n ?? '(unnamed)').join(', ')}; reconnect them under a valid name.`);
+      lines.push(`Skipped unusable peer entries: ${d.skippedPeers.map(n => (n === null ? '(unnamed)' : esc(n))).join(', ')}; reconnect them under a valid name.`);
     }
     return lines.join('\n');
   },
 
   sync(d) {
-    return `Synced ${d.project} from remote "${d.remote}" by ${MODE_LABELS[d.mode]}. ${stateSentence(d)}`;
+    return `Synced ${esc(d.project)} from remote "${esc(d.remote)}" by ${MODE_LABELS[d.mode]}. ${stateSentence(d)}`;
   },
 };
 

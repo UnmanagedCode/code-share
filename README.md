@@ -256,9 +256,9 @@ npm test      # node --test, then tsc -p frontend, then vitest
 | `tests/tunnel-check.test.mjs` | `ensureCloudflared` gives up after `CLOUDFLARED_CHECK_TIMEOUT_MS`, against fake `cloudflared` scripts only (no tunnel) |
 | `tests/localtunnel.test.mjs` | `--tunnel localtunnel` on the overridden axios: `package.json`'s `overrides.localtunnel.axios` matches the test's `MIN_AXIOS` floor and localtunnel resolves an axios 1.x at or above it; against a loopback stub of the localtunnel server API, a tunnel opens, carries a request and closes and opens no new tunnel connection after `stop()`, and a server error is retried |
 | `tests/noshell.test.mjs` | Git runs as `spawn('git', argv)` with no shell: a shell-active project name clones without side effect; unsafe branches are refused before any git runs |
-| `tests/mcp-dispatch.test.mjs` | MCP dispatcher: `FORMAT_UNKNOWN` (bounded reply for any value), no `format` means `{text}`, `TOOL_UNKNOWN` (inherited keys included), `BAD_REQUEST`, `INTERNAL`, an invalid JSON body over HTTP |
-| `tests/mcp-tools.test.mjs` | `status`, `share`, `sync` in both formats against the manifest `outputSchema`: oldest stored shapes, no list cap, every sync mode and state, every refusal code and its `details`, the git-output ceiling flag |
-| `tests/mcp-secrets.test.mjs` | No MCP reply or refusal `details` exposes a secret that the `status` result did not before; `FETCH_FAILED` and `PEER_WIRING_FAILED` messages add only names |
+| `tests/mcp-dispatch.test.mjs` | MCP dispatcher: `FORMAT_UNKNOWN` (bounded reply for any value), no `format` means `{text}`, `TOOL_UNKNOWN` (inherited keys included), `FORMAT_UNKNOWN` checked before the tool, `BAD_REQUEST` (falsy non-object `arguments` included), `INTERNAL`, an invalid JSON body over HTTP |
+| `tests/mcp-tools.test.mjs` | `status`, `share`, `sync` in both formats against the manifest `outputSchema`: stored config values and the three tunnel states, oldest stored shapes, no list cap (top-level and per-project peers, several wired peers), peer `url`/`token` at both levels, every sync mode, state and label, caller-supplied `remote` and `branch`, share defaults, every refusal code and its `details`, the git-output ceiling flag, byte-identical CLI/web-UI messages, control-character escaping in the text views |
+| `tests/mcp-secrets.test.mjs` | No `status` reply exposes a secret that the previous `status` result did not; `share`/`sync` replies carry none; every refusal code the tools can raise, driven with secrets seeded, has no secret in `details` and nothing in its message beyond what the underlying message carried |
 | `tests/mcp-manifest.test.mjs` | Every manifest tool has a valid object `outputSchema`; manifest names equal the dispatcher's; descriptions are format-neutral; no secret-bearing field is `required` |
 | `tests/jsonSchemaSubset.test.mjs` | The test-only port of code-conductor's schema-subset validator; with `CODE_CONDUCTOR_DIR` set, its keyword and type sets are compared with code-conductor's source |
 | `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, only `src/lib/api.ts` touches the network and every `api()` path is a literal `api/…`; each sweep is proven against a planted offender |
@@ -345,7 +345,7 @@ Each tool in `mcp.tools` declares an `outputSchema`, so it is served in both for
 | `text` or absent | `{text}`: prose built from the same data |
 | anything else | `{error, code: "FORMAT_UNKNOWN"}` |
 
-A refusal is `{error, code, details?}` in either format. Dispatcher codes for every tool: `TOOL_UNKNOWN`, `BAD_REQUEST` (also an invalid JSON body or non-object `arguments`; `details.argument` names a malformed argument), `INTERNAL` (an unexpected failure).
+A refusal is `{error, code, details?}` in either format. Dispatcher codes for every tool: `TOOL_UNKNOWN`, `BAD_REQUEST` (an invalid JSON body or non-object `arguments`, both without `details`; a malformed tool argument carries `details.argument`), `INTERNAL` (an unexpected failure).
 
 | Tool | json fields | Text view | Refusal codes (`details` keys) |
 |---|---|---|---|
@@ -355,6 +355,7 @@ A refusal is `{error, code, details?}` in either format. Dispatcher codes for ev
 
 - No list is capped. `SYNC_CONFLICT` lists every conflicting file in `details.conflictingFiles`, bounded only by `LIMITS.GIT_OUTPUT_MAX_CHARS` on git's output; `conflictingFilesTruncated` is `true` when that bound cut the list.
 - `details` never carries a URL, a token or git's error output.
+- The text views escape C0/C1 control characters, `\n`, `\r` and `\t` included, as visible `\n` / `\u001b` sequences in every interpolated value, so a peer-sourced URL, token or name cannot start a line of its own. The json view carries the raw values.
 
 ## Security notes
 
