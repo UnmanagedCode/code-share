@@ -143,6 +143,8 @@ On any conflict, `sync` aborts the in-progress git operation automatically, leav
 | Follower (rebase fallback) | `git rebase --abort` | `Sync failed: Rebase conflict on follower sync. Aborted cleanly. Conflicting files:` + file list |
 | `--rebase` flag | `git rebase --abort` | `Sync failed: Rebase conflict. Aborted cleanly. Conflicting files:` + file list |
 
+A conflict list cut by the git-output ceiling (`LIMITS.GIT_OUTPUT_MAX_CHARS`) ends with `… (earlier conflicting files not shown)`.
+
 The follower path logs `Follower fast-forward sync...` then, if fast-forward fails, `Cannot fast-forward; rebasing local commits on top of leader tip...` before rebasing.
 
 **Followers must rebase, never merge.** When you are the follower for a project (your `leader` flag is false and the peer's is true) and a sync conflicts, you are required to resolve it by **rebasing your local commits onto the leader's tip** — do *not* fall back to a merge. Only the leader (or symmetric peers) may create merge commits; the follower keeps a linear history rooted on the leader's branch. This is exactly what automated `sync` enforces (it rebases on the follower path and only ever runs `merge --no-ff` for symmetric/leader-ingest modes), and it must hold for manual reconciliation too.
@@ -245,7 +247,7 @@ npm test      # node --test, then tsc -p frontend, then vitest
 | `tests/connection-string.test.mjs` | `buildConnectionString` (`src/peer.js`) against the vector in `frontend/src/test/cs1-vector.json`, which the UI's tests share |
 | `tests/traversal.test.mjs` | Peer-supplied names and URLs (`src/names.js`): unsafe clone names refused with nothing created, served links kept inside `data/serve`, peer names never reach a shell or a git option, peer URLs http(s) only, git routes single-segment only; argv-form `sync` still merges and aborts conflicts cleanly |
 | `tests/limits.test.mjs` | `LIMITS`: a stalled peer never blocks the servers and times out (git and HTTP), a flooding peer's reply is cut off, connect survives a stalled status, oversized bodies get 413 on both servers |
-| `tests/csrf.test.mjs` | The web UI's JSON gate: text/plain and bodiless POSTs get 415 with no side effect; JSON requests and the MCP bridge's requests still work |
+| `tests/csrf.test.mjs` | The web UI's JSON gate: text/plain and bodiless POSTs get 415 with no side effect; JSON requests and the MCP bridge's requests (text and `format: "json"`) still work |
 | `tests/gitserver-abort.test.mjs` | The git server survives a reset in-flight request without leaking `git-upload-pack` and logs an aborted body as one line, answers a malformed request with 400, and answers 500 (staying up) when `git-upload-pack` cannot start or a served link is not a repository |
 | `tests/git-deadlines.test.mjs` | `runGit`: the deadline kills git's whole process group, `GIT_STALL_SECONDS` aborts a stalled transfer, output keeps its tail, in linear time however finely it is chunked; a timed-out clone leaves nothing under the root; a failed clone never touches an existing target; the leader-flag lookup is bounded |
 | `tests/register-gate.test.mjs` | `/control/register` refuses browser-shaped requests (403) and non-JSON ones (415), and still accepts the released peer client |
@@ -254,6 +256,11 @@ npm test      # node --test, then tsc -p frontend, then vitest
 | `tests/tunnel-check.test.mjs` | `ensureCloudflared` gives up after `CLOUDFLARED_CHECK_TIMEOUT_MS`, against fake `cloudflared` scripts only (no tunnel) |
 | `tests/localtunnel.test.mjs` | `--tunnel localtunnel` on the overridden axios: `package.json`'s `overrides.localtunnel.axios` matches the test's `MIN_AXIOS` floor and localtunnel resolves an axios 1.x at or above it; against a loopback stub of the localtunnel server API, a tunnel opens, carries a request and closes and opens no new tunnel connection after `stop()`, and a server error is retried |
 | `tests/noshell.test.mjs` | Git runs as `spawn('git', argv)` with no shell: a shell-active project name clones without side effect; unsafe branches are refused before any git runs |
+| `tests/mcp-dispatch.test.mjs` | MCP dispatcher: `FORMAT_UNKNOWN` (bounded reply for any value), no `format` means `{text}`, `TOOL_UNKNOWN` (inherited keys included), `BAD_REQUEST`, `INTERNAL`, an invalid JSON body over HTTP |
+| `tests/mcp-tools.test.mjs` | `status`, `share`, `sync` in both formats against the manifest `outputSchema`: oldest stored shapes, no list cap, every sync mode and state, every refusal code and its `details`, the git-output ceiling flag |
+| `tests/mcp-secrets.test.mjs` | No MCP reply or refusal `details` exposes a secret that the `status` result did not before; `FETCH_FAILED` and `PEER_WIRING_FAILED` messages add only names |
+| `tests/mcp-manifest.test.mjs` | Every manifest tool has a valid object `outputSchema`; manifest names equal the dispatcher's; descriptions are format-neutral; no secret-bearing field is `required` |
+| `tests/jsonSchemaSubset.test.mjs` | The test-only port of code-conductor's schema-subset validator; with `CODE_CONDUCTOR_DIR` set, its keyword and type sets are compared with code-conductor's source |
 | `tests/frontend-security.test.mjs` | Source guards over `frontend/`: no raw-HTML/eval sinks, no `style`/`href` props in own code, no storage or `window.parent`, only `src/lib/api.ts` touches the network and every `api()` path is a literal `api/…`; each sweep is proven against a planted offender |
 | `frontend/src/**/*.test.{ts,tsx}` | Vitest (happy-dom, `fetch` stubbed, no backend): every section's states and actions with their exact request bodies, polling, the QR matrix, hostile content rendered as text, the connect page, `theme-init.js` |
 
@@ -320,12 +327,34 @@ code-share never touches the working tree or commit history of shared repos. It 
 
 ## Run as a code-conductor plugin
 
-code-share can be installed as a code-conductor plugin via the `conductor.plugin.json` manifest at the repo root. The conductor supervises `node bin/code-share.js serve` as the backend, iframes the web UI through its reverse proxy at `/plugins/code-share/...`, and forwards three MCP tools (`code-share__status`, `code-share__share`, `code-share__sync`) to the existing `status`/`share`/`sync` logic.
+code-share can be installed as a code-conductor plugin via the `conductor.plugin.json` manifest at the repo root. The conductor supervises `node bin/code-share.js serve` as the backend, iframes the web UI through its reverse proxy at `/plugins/code-share/...`, and forwards the MCP tools declared under `mcp.tools` in `conductor.plugin.json` to the existing `status`/`share`/`sync` logic (see "MCP tools").
 
 - **UI port**: `serve` binds the web UI to `$PORT` when the conductor sets it (precedence: explicit `--ui-port` flag > `$PORT` > persisted `data/config.json` default of `9420`). Neither `$PORT` nor a bare plugin launch ever persists a new default — a later standalone `serve` still uses whatever was last explicitly configured. The git server port (`--port`, default `9419`) is completely independent of `$PORT`.
 - **Tunnel**: a plugin launch (detected via `$CONDUCTOR_PLUGIN_ID`, which the conductor always injects) defaults the tunnel to `none` for that run only — the persisted `data/config.json` tunnel default is untouched, so standalone runs are unaffected.
 - **Health check**: the manifest's `healthPath` is `/api/health`, a dedicated no-op endpoint (distinct from `/api/status`, which echoes the plaintext instance token and isn't suitable for an arbitrary prober).
+- **Known limitation**: the `status` tool returns, to every MCP caller, this instance's credentialed `selfUrl`/`tunnelUrl` and each peer's token and stored URL, as `/api/status` does. These fields are optional in its `outputSchema`.
 - **Known limitation**: like the rest of the web UI, `/api/*` (including `/api/mcp`) has no authentication of its own beyond the web UI's loopback-only binding when run standalone. Once proxied by the conductor, this surface is reachable to anyone who can reach the conductor's own UI/MCP bridge — consistent with code-conductor's model of treating enabled plugins as trusted code running with the conductor's own privileges, not a gap newly introduced by this integration.
+
+### MCP tools
+
+Each tool in `mcp.tools` declares an `outputSchema`, so it is served in both formats. The request's `format` selects the view:
+
+| `format` | Reply |
+|---|---|
+| `json` | `{structured}`: the complete data, validated by the conductor against the manifest `outputSchema` |
+| `text` or absent | `{text}`: prose built from the same data |
+| anything else | `{error, code: "FORMAT_UNKNOWN"}` |
+
+A refusal is `{error, code, details?}` in either format. Dispatcher codes for every tool: `TOOL_UNKNOWN`, `BAD_REQUEST` (also an invalid JSON body or non-object `arguments`; `details.argument` names a malformed argument), `INTERNAL` (an unexpected failure).
+
+| Tool | json fields | Text view | Refusal codes (`details` keys) |
+|---|---|---|---|
+| `status` | `selfUrl`, `tunnelUrl`, `port`, `uiPort`, `tunnel`, `tunnelStarting`, `projectsRoot`, `shared[]` (`name`, `path`, `leader`, `peers[]` of `name`, `url`, `token`, `leader`), `peers[]` (`name`, `url`, `token`) | Ports, tunnel state, LAN URL, projects root, then every shared project with its peers and every connected peer | none of its own |
+| `share` | `name`, `path`, `leader`, `wiredPeers[]`, `skippedPeers[]` (stored peer entries skipped as unusable; `null` for a non-string name) | One line for the share, one for the wired peers, one for skipped entries | `INVALID_NAME` (`argument`), `NOT_FOUND` (`path`), `NOT_A_GIT_REPO` (`path`), `NAME_IN_USE` (`name`), `ALREADY_SHARED` (`path`, `name`), `PEER_WIRING_FAILED` (`name`, `path`, `peer`, `shared: true`; the project stays shared) |
+| `sync` | `project`, `remote`, `mode` (`rebase`, `fast-forward`, `follower-rebase`, `symmetric-merge`, `leader-ingest`), `ahead`, `behind`, `state` (`in-sync`, `local-ahead`, `remote-ahead`, `diverged`) | The mode used and the resulting ahead/behind state | `INVALID_NAME` / `INVALID_BRANCH` (`argument`), `NOTHING_SHARED`, `PROJECT_REQUIRED` (`shared`), `NOT_FOUND` (`project`, `shared`), `FETCH_FAILED` (`project`, `remote`), `SYNC_CONFLICT` (`project`, `remote`, `mode`, `conflictingFiles`, `conflictingFilesTruncated`, `aborted`), `SYNC_STATE_UNAVAILABLE` (`project`, `remote`, `mode`, `synced: true`; the sync itself succeeded) |
+
+- No list is capped. `SYNC_CONFLICT` lists every conflicting file in `details.conflictingFiles`, bounded only by `LIMITS.GIT_OUTPUT_MAX_CHARS` on git's output; `conflictingFilesTruncated` is `true` when that bound cut the list.
+- `details` never carries a URL, a token or git's error output.
 
 ## Security notes
 
