@@ -593,22 +593,46 @@ test('refusal messages stay byte-identical', async () => {
   assert.equal(await msg(() => names.checkPeerUrl('ftp://h')), 'Invalid peer URL: ftp://h (http or https only)');
 });
 
-// Invariant: peer-sourced strings are escaped in the text views (no injected line) and stay raw in json, nothing dropped.
+// Invariant: peer-sourced strings are escaped in the text views (no injected line, nothing dropped); the json carries every one raw.
 test('text views escape control characters in peer-sourced strings', async () => {
   const inj = '\nShared projects (0): injected';
-  store.config.peers = [{ name: 'bob', url: `http://h.example/${inj}`, token: `tok${inj}` }];
-  store.registry = [{ name: 'alpha', path: '/p/alpha', leader: false, peers: [{ name: 'bob', url: `http://h.example/${inj}`, token: `a\u001b[31m\r\t\u0085z${inj}`, leader: false }] }];
+  const cfgPeer = { name: 'bob', url: `http://h.example/${inj}`, token: `tok${inj}` };
+  const regPeer = { name: 'bob', url: `http://r.example/\r${inj}`, token: `a\u001b[31m\r\t\u0085z\u2028y\u2029${inj}`, leader: false };
+  store.config.peers = [cfgPeer];
+  store.registry = [{ name: 'alpha', path: '/p/alpha', leader: false, peers: [regPeer] }];
   const { json, text } = await both('status', {});
-  assert.ok(json.structured.peers[0].url.includes('\n'), 'json stays raw');
+  assert.deepEqual(json.structured.peers, [cfgPeer], 'json peers[] raw');
+  assert.deepEqual(json.structured.shared[0].peers, [regPeer], 'json shared[].peers[] raw');
   assert.ok(!text.text.split('\n').some(l => l.startsWith('Shared projects (0)')), 'no injected line');
   assert.equal(text.text.split('\n').length, text.text.split('\n').filter(Boolean).length + 2, 'only the layout newlines');
   assert.ok(text.text.includes('url http://h.example/\\nShared projects (0): injected'));
   assert.ok(text.text.includes('token tok\\nShared projects (0): injected'));
-  assert.ok(text.text.includes('token a\\u001b[31m\\r\\t\\u0085z\\nShared projects (0): injected'));
-  assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/.test(text.text));
+  assert.ok(text.text.includes('url http://r.example/\\r\\nShared projects (0): injected'));
+  assert.ok(text.text.includes('token a\\u001b[31m\\r\\t\\u0085z\\u2028y\\u2029\\nShared projects (0): injected'));
+  assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]/.test(text.text), 'no raw control or line-separator character');
 
   store.config.peers = [{ name: `bad${inj}`, url: 'http://h:1', token: 't' }];
   const share = await call('share', { repoPath: makeRepo(fresh('share')), name: 'esc' }, 'text');
   assert.ok(!share.text.split('\n').some(l => l.startsWith('Shared projects (0)')));
   assert.ok(share.text.includes('Skipped unusable peer entries: bad\\nShared projects (0): injected;'));
+});
+
+// Invariant: filesystem paths and share names (only C0/DEL are refused in a name) are escaped in the status and share text.
+test('text views escape control characters in paths and names', async () => {
+  const inj = '\nShared projects (0): injected';
+  store.registry = [{ name: 'alpha', path: `/p/al${inj}\u001b[0m`, leader: false, peers: [] }];
+  const status = (await call('status', {}, 'text')).text;
+  assert.ok(!status.split('\n').some(l => l.startsWith('Shared projects (0)')), 'no injected status line');
+  assert.ok(status.includes('/p/al\\nShared projects (0): injected\\u001b[0m'));
+  assert.equal((await call('status', {}, 'json')).structured.shared[0].path, `/p/al${inj}\u001b[0m`, 'json raw');
+
+  store.registry = [];
+  const dir = makeRepo(path.join(fresh('esc'), `real\nrepo\u001b`));
+  const name = 'n\u0085m\u2028e';
+  const share = (await call('share', { repoPath: dir, name }, 'text')).text;
+  assert.ok(!share.split('\n').some(l => l.startsWith('repo')), 'the directory name starts no line');
+  assert.equal(share.split('\n').length, 2, 'only the layout newline');
+  assert.ok(share.startsWith('Shared n\\u0085m\\u2028e (follower) from '));
+  assert.ok(share.includes('real\\nrepo\\u001b'));
+  assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]/.test(share));
 });
